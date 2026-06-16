@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.venv/
+env/
+venv/
+ENV/
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+
+# Frontend
+node_modules/
+dist/
+.eslintcache
+*.local
+
+# Application specific
+label_studio_data/
+label_studio_import.json
+data/
+backend/data/
+sql_app.db
+backend/sql_app.db

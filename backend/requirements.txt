@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+SQLAlchemy
+opencv-python-headless
+opencv-contrib-python-headless
+numpy
+python-multipart
+pydantic
+pydantic-settings
+requests
+pillow
+transformers
+accelerate
+# Optional: label-studio (only needed if you want the external Label Studio server)
+# label-studio
