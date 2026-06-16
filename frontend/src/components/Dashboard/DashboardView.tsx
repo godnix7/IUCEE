@@ -298,12 +298,12 @@ function BulkCleanupTools({ project, onStatsUpdate }: { project: any, onStatsUpd
   };
 
   const actionLabels: Record<string, string> = {
-    processed: "Remove All Processed Images",
-    reviewed: "Remove All Reviewed Images",
-    accepted: "Remove All Accepted Images",
-    rejected: "Remove All Rejected Images",
+    processed: "Reset All Processed Images",
+    reviewed: "Reset All Reviewed Images",
+    accepted: "Reset All Accepted Images",
+    rejected: "Reset All Rejected Images",
     completed_queue: "Clear Completed Queue",
-    all: "Clear Entire Project"
+    all: "Delete Entire Project"
   };
 
   return (
@@ -318,7 +318,8 @@ function BulkCleanupTools({ project, onStatsUpdate }: { project: any, onStatsUpd
           <input type="checkbox" className="hidden" checked={deleteSourceFiles} onChange={e => setDeleteSourceFiles(e.target.checked)} />
           <span className="text-sm font-medium text-textMuted group-hover:text-white transition-colors">Also Delete Source Files (.jpg, .png) from Disk</span>
         </label>
-        {deleteSourceFiles && <p className="text-xs text-red-400 mt-2 ml-8">Warning: This cannot be undone. Source files will be permanently deleted.</p>}
+        {deleteSourceFiles && <p className="text-xs text-red-400 mt-2 ml-8">Warning: This cannot be undone. DB records and source files will be permanently deleted.</p>}
+        {!deleteSourceFiles && <p className="text-xs text-blue-400 mt-2 ml-8">Info: Images will simply be reset to 'pending' state and remain in the project.</p>}
       </div>
 
       <div className="flex flex-wrap gap-4">
@@ -328,7 +329,7 @@ function BulkCleanupTools({ project, onStatsUpdate }: { project: any, onStatsUpd
               <div className="flex items-center gap-2 animate-in fade-in zoom-in duration-200">
                 <span className="text-sm font-medium text-red-400 mr-2">Are you sure?</span>
                 <button disabled={isDeleting} onClick={() => handleCleanup(key)} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium transition-colors disabled:opacity-50">
-                  {isDeleting ? 'Deleting...' : 'Yes, Delete'}
+                  {isDeleting ? 'Processing...' : (deleteSourceFiles || key === 'all' || key === 'completed_queue' ? 'Yes, Delete' : 'Yes, Reset')}
                 </button>
                 <button disabled={isDeleting} onClick={() => setConfirmAction(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded text-sm font-medium transition-colors disabled:opacity-50">
                   Cancel

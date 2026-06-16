@@ -146,10 +146,37 @@ def cleanup_project(project_id: int, req: CleanupRequest, db: Session = Depends(
     else:
         raise HTTPException(status_code=400, detail="Invalid cleanup target")
         
-    images_to_delete = query.all()
-    count = len(images_to_delete)
+    images = query.all()
+    count = len(images)
     
-    for img in images_to_delete:
+    # If the user specifically checked "Delete Source Files", or if the target is "all", 
+    # we do a hard delete of the database records (and optionally the files).
+    # Otherwise, for process-state buttons, we just RESET the images back to normal.
+    do_hard_delete = req.delete_source_files or req.target == "all"
+    
+    if not do_hard_delete:
+        if count > 0:
+            image_ids = [img.id for img in images]
+            from app.models import Annotation, ReviewLog, ProcessingQueue
+            db.query(Annotation).filter(Annotation.image_id.in_(image_ids)).delete(synchronize_session=False)
+            db.query(ReviewLog).filter(ReviewLog.image_id.in_(image_ids)).delete(synchronize_session=False)
+            db.query(ProcessingQueue).filter(ProcessingQueue.image_id.in_(image_ids)).delete(synchronize_session=False)
+            
+            for img in images:
+                img.status = "pending"
+                img.review_status = "unreviewed"
+                img.confidence = None
+                img.agreement_score = None
+                img.rejection_reason = None
+                img.reviewer_notes = None
+                img.mask_path = None
+                img.confidence_map_path = None
+                
+            db.commit()
+        return {"message": f"Successfully reset {count} images back to pending."}
+    
+    # Hard Delete Logic
+    for img in images:
         if req.delete_source_files and os.path.exists(img.absolute_path):
             try:
                 os.remove(img.absolute_path)
@@ -158,4 +185,4 @@ def cleanup_project(project_id: int, req: CleanupRequest, db: Session = Depends(
         db.delete(img)
         
     db.commit()
-    return {"message": f"Deleted {count} images"}
+    return {"message": f"Successfully deleted {count} images from project."}

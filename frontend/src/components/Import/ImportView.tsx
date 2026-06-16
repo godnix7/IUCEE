@@ -5,10 +5,6 @@ import { api } from '../../api';
 export default function ImportView({ onProjectCreated }: { onProjectCreated: (p: any) => void }) {
   const [name, setName] = useState('');
   const [path, setPath] = useState('C:\\Nischay\\PROJECTS\\IUCEEE\\Dataset'); // Default placeholder
-  const classes = [
-    { name: 'Building', color: '#3b82f6', shortcut_key: '1' },
-    { name: 'Road', color: '#8b5cf6', shortcut_key: '2' }
-  ];
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -16,10 +12,6 @@ export default function ImportView({ onProjectCreated }: { onProjectCreated: (p:
     e.preventDefault();
     if (!name || !path) {
       setError('Name and Folder Path are required');
-      return;
-    }
-    if (classes.length === 0) {
-      setError('At least one class is required');
       return;
     }
 
@@ -30,8 +22,7 @@ export default function ImportView({ onProjectCreated }: { onProjectCreated: (p:
       const project = await api.projects.create({
         name,
         description: 'Auto-imported dataset',
-        root_path: path,
-        classes
+        root_path: path
       });
       onProjectCreated(project);
     } catch (err: any) {

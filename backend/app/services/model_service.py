@@ -52,6 +52,75 @@ class ModelService:
     _segformer_processor = None
     _segformer_model = None
 
+    ADE_INDEX_TO_AERIAL = {
+        # Building
+        1: "building",     # building, edifice
+        25: "building",    # house
+        48: "building",    # skyscraper
+        51: "building",    # grandstand, outdoor stage
+        79: "building",    # hovel
+        84: "building",    # tower
+        86: "building",    # awning, sunshade, sunblind
+        88: "building",    # booth, cubicle
+        114: "building",   # tent, collapse shelter
+
+        # Road
+        6: "road",         # road, route
+        54: "road",        # runway
+        61: "road",        # bridge, span
+        91: "road",        # dirt track
+        140: "road",       # pier
+
+        # Sidewalk
+        11: "sidewalk",    # sidewalk, pavement
+        52: "sidewalk",    # path
+
+        # Vehicle
+        20: "vehicle",     # car, auto, automobile
+        80: "vehicle",     # bus, autobus, coach
+        83: "vehicle",     # truck, motortruck
+        90: "vehicle",     # airplane, aeroplane
+        102: "vehicle",    # van
+        116: "vehicle",    # minibike, motorbike
+        127: "vehicle",    # bicycle, bike, wheel
+
+        # Tree Cover
+        4: "tree_cover",       # tree
+        17: "tree_cover",      # plant, flora, plant life
+        66: "tree_cover",      # flower
+        72: "tree_cover",      # palm, palm tree
+        106: "tree_cover",     # canopy
+
+        # Water Body
+        21: "water_body",      # water
+        26: "water_body",      # sea
+        60: "water_body",      # river
+        109: "water_body",     # swimming pool, hot tub
+        113: "water_body",     # waterfall, falls
+        128: "water_body",     # lake
+
+        # Bare Ground
+        9: "bare_ground",      # grass
+        13: "bare_ground",     # earth, ground
+        29: "bare_ground",     # field
+        34: "bare_ground",     # rock, stone
+        46: "bare_ground",     # sand
+        68: "bare_ground",     # hill
+        94: "bare_ground",     # land, ground
+    }
+
+    ALIASES = {
+        "building": ["building", "house", "rooftop", "structure", "roof", "dwellings"],
+        "road": ["road", "street", "highway", "driveway", "runway", "bridge"],
+        "tree_cover": ["tree", "canopy", "forest", "vegetation", "plant", "wood", "shrub", "low vegetation"],
+        "water_body": ["water", "lake", "river", "sea", "pool", "pond"],
+        "parking_area": ["parking", "lot", "garage"],
+        "vehicle": ["vehicle", "car", "bus", "truck", "van", "automobile"],
+        "sidewalk": ["sidewalk", "path", "pavement", "sidewalk path"],
+        "bare_ground": ["ground", "dirt", "sand", "earth", "soil", "land", "grass", "field", "bare"],
+        "construction_area": ["construction", "site", "scaffold"],
+    }
+
     @staticmethod
     def _extract_polygons_from_mask(binary_mask: np.ndarray) -> List[List[List[float]]]:
         """Extracts polygon coordinates from a binary mask."""
@@ -89,7 +158,7 @@ class ModelService:
 
     @staticmethod
     def load_real_models():
-        """Load SegFormer for GPU semantic segmentation when enabled."""
+        """Load SegFormer-b3 in fp16 for GPU semantic segmentation when enabled."""
         from app.core.config import settings
         if not settings.USE_REAL_MODELS:
             print("[ModelService] USE_REAL_MODELS=false, using simulation pipeline.")
@@ -102,21 +171,24 @@ class ModelService:
 
         device = ModelService._get_execution_device()
         ModelService._device = device
-        print(f"[{device.upper()}] Loading SegFormer (ADE20K) onto {device}...")
+        print(f"[{device.upper()}] Loading SegFormer-b3 (ADE20K) in fp16 onto {device}...")
 
         try:
             from transformers import AutoImageProcessor, AutoModelForSemanticSegmentation
 
-            model_id = "nvidia/segformer-b0-finetuned-ade-512-512"
+            model_id = "nvidia/segformer-b3-finetuned-ade-512-512"
             ModelService._segformer_processor = AutoImageProcessor.from_pretrained(model_id)
-            ModelService._segformer_model = AutoModelForSemanticSegmentation.from_pretrained(model_id)
+            ModelService._segformer_model = AutoModelForSemanticSegmentation.from_pretrained(
+                model_id, torch_dtype=torch.float16 if device == "cuda" else torch.float32
+            )
             ModelService._segformer_model.to(device)
             ModelService._segformer_model.eval()
             ModelService._real_models_loaded = True
-            print(f"[ModelService] SegFormer loaded successfully on {device}.")
+            num_params = sum(p.numel() for p in ModelService._segformer_model.parameters()) / 1e6
+            print(f"[ModelService] SegFormer-b3 loaded ({num_params:.1f}M params) on {device}.")
         except Exception as exc:
             ModelService._real_models_loaded = False
-            print(f"[ModelService] Failed to load SegFormer: {exc}")
+            print(f"[ModelService] Failed to load SegFormer-b3: {exc}")
             print("[ModelService] Falling back to simulation pipeline.")
 
     @staticmethod
@@ -151,18 +223,117 @@ class ModelService:
         return softmax
 
     @staticmethod
-    def _map_ade_label_to_aerial(label: str) -> Optional[str]:
+    def _map_ade_to_aerial_robust(ade_idx: int, label: str) -> Optional[str]:
+        # 1. Try index-based mapping first (very precise)
+        if ade_idx in ModelService.ADE_INDEX_TO_AERIAL:
+            return ModelService.ADE_INDEX_TO_AERIAL[ade_idx]
+            
+        # 2. Try clean name-based mapping
         normalized = label.lower().strip().replace("_", " ")
         if normalized in ADE_TO_AERIAL:
             return ADE_TO_AERIAL[normalized]
-        for key, aerial in ADE_TO_AERIAL.items():
-            if key in normalized or normalized in key:
-                return aerial
+            
+        # Avoid matching false positives like "pool table" -> "pool" or "skyscraper" -> "sky"
+        blacklist = {"pool table", "skyscraper", "seat", "streetlight"}
+        if any(b in normalized for b in blacklist):
+            return None
+            
+        words = normalized.replace(",", " ").replace(";", " ").split()
+        for word in words:
+            if word in ADE_TO_AERIAL:
+                return ADE_TO_AERIAL[word]
+                
         return None
 
     @staticmethod
+    def _find_best_project_class_idx(aerial_name: Optional[str], project_classes_norm: List[str]) -> Optional[int]:
+        if not aerial_name:
+            return None
+            
+        norm_aerial = aerial_name.lower().strip().replace("_", " ").replace("-", " ")
+        
+        # 1. Exact match
+        if norm_aerial in project_classes_norm:
+            return project_classes_norm.index(norm_aerial)
+            
+        # 2. Check aliases
+        for key, words in ModelService.ALIASES.items():
+            if key == aerial_name:
+                for word in words:
+                    for idx, norm_proj in enumerate(project_classes_norm):
+                        if word == norm_proj or (len(word) > 3 and word in norm_proj) or (len(norm_proj) > 3 and norm_proj in word):
+                            return idx
+                            
+        # 3. Generic substring fallback
+        for idx, norm_proj in enumerate(project_classes_norm):
+            if norm_proj in norm_aerial or norm_aerial in norm_proj:
+                return idx
+                
+        return None
+
+    # ---------- Multi-Scale Inference with TTA ----------
+
+    INFERENCE_SCALES = [0.75, 1.0, 1.25]
+
+    @staticmethod
+    def _run_single_scale(pil_img, orig_h: int, orig_w: int, scale: float, flip: bool = False):
+        """Run SegFormer at a given scale, optionally with horizontal flip."""
+        torch = ModelService._get_torch()
+        from PIL import Image as PILImage
+
+        w, h = pil_img.size
+        new_w, new_h = int(w * scale), int(h * scale)
+        scaled_img = pil_img.resize((new_w, new_h), PILImage.BILINEAR)
+
+        if flip:
+            scaled_img = scaled_img.transpose(PILImage.FLIP_LEFT_RIGHT)
+
+        inputs = ModelService._segformer_processor(images=scaled_img, return_tensors="pt")
+        dtype = next(ModelService._segformer_model.parameters()).dtype
+        inputs = {k: v.to(device=ModelService._device, dtype=dtype) if v.is_floating_point() else v.to(ModelService._device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            with torch.cuda.amp.autocast(enabled=(ModelService._device == "cuda")):
+                outputs = ModelService._segformer_model(**inputs)
+            logits = outputs.logits.float()  # cast back to fp32 for interpolation
+            upsampled = torch.nn.functional.interpolate(
+                logits,
+                size=(orig_h, orig_w),
+                mode="bilinear",
+                align_corners=False,
+            )
+            probs = torch.softmax(upsampled, dim=1).squeeze(0).cpu().numpy()
+
+        if flip:
+            probs = probs[:, :, ::-1].copy()  # un-flip
+
+        return probs
+
+    @staticmethod
+    def _multi_scale_inference(pil_img, orig_h: int, orig_w: int) -> np.ndarray:
+        """Run SegFormer at multiple scales + horizontal flip TTA, average softmax."""
+        accumulated = None
+        count = 0
+
+        for scale in ModelService.INFERENCE_SCALES:
+            # Normal orientation
+            probs = ModelService._run_single_scale(pil_img, orig_h, orig_w, scale, flip=False)
+            if accumulated is None:
+                accumulated = probs.astype(np.float64)
+            else:
+                accumulated += probs
+            count += 1
+
+            # Horizontally flipped
+            probs_flipped = ModelService._run_single_scale(pil_img, orig_h, orig_w, scale, flip=True)
+            accumulated += probs_flipped
+            count += 1
+
+        return (accumulated / count).astype(np.float32)
+
+    @staticmethod
     def _generate_real_prob_map(image_path: str, project_classes: List[str]) -> np.ndarray:
-        """Run SegFormer on GPU/CPU and map ADE20K logits to project classes."""
+        """Run SegFormer-b3 with multi-scale TTA and map ADE20K logits to project classes."""
         if not ModelService._real_models_loaded:
             raise RuntimeError("Real models are not loaded")
 
@@ -177,35 +348,47 @@ class ModelService:
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         pil_img = PILImage.fromarray(img_rgb)
 
-        inputs = ModelService._segformer_processor(images=pil_img, return_tensors="pt")
-        inputs = {k: v.to(ModelService._device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            outputs = ModelService._segformer_model(**inputs)
-            logits = outputs.logits
-            upsampled = torch.nn.functional.interpolate(
-                logits,
-                size=(orig_h, orig_w),
-                mode="bilinear",
-                align_corners=False,
-            )
-            probs_ade = torch.softmax(upsampled, dim=1).squeeze(0).cpu().numpy()
+        # Multi-scale inference with TTA (6 forward passes: 3 scales × 2 orientations)
+        probs_ade = ModelService._multi_scale_inference(pil_img, orig_h, orig_w)
 
         num_classes = len(project_classes)
-        class_to_idx = {name: idx for idx, name in enumerate(project_classes)}
-        fallback_idx = class_to_idx.get("bare_ground", class_to_idx.get("road", 0))
-        fused = np.full((orig_h, orig_w, num_classes), 1e-4, dtype=np.float32)
+        
+        # Normalize project class names and build index mapping
+        def normalize_name(s: str) -> str:
+            return s.lower().strip().replace("_", " ").replace("-", " ")
+            
+        project_classes_norm = [normalize_name(c) for c in project_classes]
+        
+        # Determine fallback index (e.g., bare_ground or road)
+        fallback_idx = 0
+        if "bare ground" in project_classes_norm:
+            fallback_idx = project_classes_norm.index("bare ground")
+        elif "road" in project_classes_norm:
+            fallback_idx = project_classes_norm.index("road")
+            
+        fused = np.zeros((orig_h, orig_w, num_classes), dtype=np.float32)
 
         id2label = ModelService._segformer_model.config.id2label
+        
+        # Map each of the 150 ADE labels to project indices
+        ade_to_proj_idx = {}
         for ade_idx in range(probs_ade.shape[0]):
             ade_label = id2label.get(ade_idx, id2label.get(str(ade_idx), ""))
-            aerial_name = ModelService._map_ade_label_to_aerial(str(ade_label))
-            if aerial_name and aerial_name in class_to_idx:
-                target_idx = class_to_idx[aerial_name]
-            else:
-                target_idx = fallback_idx
-            fused[:, :, target_idx] += probs_ade[ade_idx]
+            aerial_name = ModelService._map_ade_to_aerial_robust(ade_idx, str(ade_label))
+            proj_idx = ModelService._find_best_project_class_idx(aerial_name, project_classes_norm)
+            ade_to_proj_idx[ade_idx] = proj_idx
 
+        # Accumulate probabilities for mapped classes
+        for ade_idx, proj_idx in ade_to_proj_idx.items():
+            if proj_idx is not None:
+                fused[:, :, proj_idx] += probs_ade[ade_idx]
+
+        # For pixels where total mapped class probability is very low, assign to fallback class
+        sum_fused = np.sum(fused, axis=-1)
+        low_prob_mask = sum_fused < 0.05
+        fused[low_prob_mask, fallback_idx] += (1.0 - sum_fused[low_prob_mask])
+
+        # Normalize to ensure sum is exactly 1.0 at each pixel
         fused = fused / np.sum(fused, axis=-1, keepdims=True)
         return fused.astype(np.float32)
 

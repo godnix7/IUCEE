@@ -48,6 +48,8 @@ export default function ReviewView({ project }: ReviewViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [selectedRegion, setSelectedRegion] = useState<number | null>(null);
+  const [hoveredRegion, setHoveredRegion] = useState<number | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [reviewNotes, setReviewNotes] = useState('');
   const [rejectionClass, setRejectionClass] = useState(reviewClasses[0]?.name || '');
   const [rejectionNotes, setRejectionNotes] = useState('');
@@ -126,12 +128,17 @@ export default function ReviewView({ project }: ReviewViewProps) {
     }
   };
 
-  const advanceQueue = () => {
-    if (currentIndex < queue.length - 1) {
-      setCurrentIndex(currentIndex + 1);
-    } else {
-      fetchQueue();
-    }
+  const removeCurrentImageFromQueue = () => {
+    setQueue((prevQueue) => {
+      const newQueue = prevQueue.filter((_, idx) => idx !== currentIndex);
+      if (newQueue.length === 0) {
+        setCurrentIndex(0);
+        fetchQueue();
+      } else if (currentIndex >= newQueue.length) {
+        setCurrentIndex(newQueue.length - 1);
+      }
+      return newQueue;
+    });
   };
 
   const handleApprove = async () => {
@@ -139,7 +146,7 @@ export default function ReviewView({ project }: ReviewViewProps) {
     setSaving(true);
     try {
       await api.review.markViewed(project.id, currentImage.id, reviewNotes);
-      advanceQueue();
+      removeCurrentImageFromQueue();
     } catch (err) {
       alert('Failed to approve: ' + err);
     } finally {
@@ -162,7 +169,7 @@ export default function ReviewView({ project }: ReviewViewProps) {
         })),
         reviewNotes,
       );
-      advanceQueue();
+      removeCurrentImageFromQueue();
     } catch (err) {
       alert('Failed to save corrections: ' + err);
     } finally {
@@ -177,7 +184,7 @@ export default function ReviewView({ project }: ReviewViewProps) {
     setSaving(true);
     try {
       await api.review.reject(project.id, currentImage.id, reason, notes);
-      advanceQueue();
+      removeCurrentImageFromQueue();
     } catch (err) {
       alert('Failed to reject: ' + err);
     } finally {
@@ -300,32 +307,66 @@ export default function ReviewView({ project }: ReviewViewProps) {
                 alt={currentImage.filename}
                 className="block max-w-full max-h-[calc(100vh-14rem)] object-contain"
               />
-              {overlayVisible && (
+              {overlayVisible && maskUrl && (
                 <img
                   src={maskUrl}
-                  alt=""
-                  className="absolute inset-0 w-full h-full object-fill opacity-45 mix-blend-screen pointer-events-none"
+                  alt="Mask Overlay"
+                  className="absolute inset-0 w-full h-full object-fill pointer-events-none"
                 />
               )}
               <svg
-                className="absolute inset-0 w-full h-full pointer-events-none"
+                className="absolute inset-0 w-full h-full pointer-events-auto"
                 viewBox={viewBox}
                 preserveAspectRatio="none"
+                onMouseMove={(e) => setMousePos({ x: e.clientX, y: e.clientY })}
               >
                 {visibleAnnotations.map((annotation, idx) => {
                   const points = annotation.segmentation.map((point) => point.join(',')).join(' ');
                   const color = getClassColor(annotation.class_name);
+                  const isSelected = selectedRegion === idx;
+                  const isHovered = hoveredRegion === idx;
                   return (
                     <polygon
                       key={`${annotation.id || idx}-${annotation.class_name}`}
                       points={points}
-                      fill={selectedRegion === idx ? `${color}66` : `${color}2f`}
-                      stroke={selectedRegion === idx ? '#ffffff' : color}
-                      strokeWidth={selectedRegion === idx ? 4 : 2}
+                      fill={isSelected ? `${color}66` : (isHovered ? `${color}44` : 'transparent')}
+                      stroke={isSelected ? '#ffffff' : (isHovered ? '#ffffff' : 'transparent')}
+                      strokeWidth={isSelected || isHovered ? (currentImage.width ? currentImage.width / 400 : 2) : 0}
+                      className="cursor-pointer transition-all duration-150 outline-none"
+                      onMouseEnter={() => setHoveredRegion(idx)}
+                      onMouseLeave={() => setHoveredRegion(null)}
+                      onClick={() => setSelectedRegion(idx)}
                     />
                   );
                 })}
               </svg>
+              
+              {/* Floating Tooltip */}
+              {hoveredRegion !== null && visibleAnnotations[hoveredRegion] && (
+                <div
+                  className="fixed z-50 pointer-events-none bg-black/90 text-white text-xs px-3 py-2 rounded shadow-lg border border-white/20 whitespace-nowrap backdrop-blur-sm"
+                  style={{ left: mousePos.x + 15, top: mousePos.y + 15 }}
+                >
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span 
+                      className="w-2.5 h-2.5 rounded-full shadow-[0_0_4px_rgba(255,255,255,0.5)]" 
+                      style={{ backgroundColor: getClassColor(visibleAnnotations[hoveredRegion].class_name) }} 
+                    />
+                    <span className="font-bold text-sm">{visibleAnnotations[hoveredRegion].class_name}</span>
+                  </div>
+                  <div className="text-textMuted text-[10px] flex justify-between gap-4">
+                    <span>Confidence:</span>
+                    <span className="font-mono">{visibleAnnotations[hoveredRegion].confidence ? Math.round((visibleAnnotations[hoveredRegion].confidence as number) * 100) + '%' : 'N/A'}</span>
+                  </div>
+                  <div className="text-textMuted text-[10px] flex justify-between gap-4">
+                    <span>Points:</span>
+                    <span className="font-mono">{visibleAnnotations[hoveredRegion].segmentation.length}</span>
+                  </div>
+                  <div className="text-emerald-400 text-[9px] mt-1.5 pt-1 border-t border-white/10 text-center">
+                    Click to edit
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -418,8 +459,10 @@ export default function ReviewView({ project }: ReviewViewProps) {
                 <div
                   key={annotation.id || idx}
                   onClick={() => setSelectedRegion(idx)}
+                  onMouseEnter={() => setHoveredRegion(idx)}
+                  onMouseLeave={() => setHoveredRegion(null)}
                   className={`p-3 rounded-md border cursor-pointer transition-colors ${
-                    selectedRegion === idx ? 'border-primary bg-primary/10' : 'border-white/5 bg-white/[0.03] hover:bg-white/[0.06]'
+                    selectedRegion === idx ? 'border-primary bg-primary/10' : (hoveredRegion === idx ? 'border-white/20 bg-white/[0.08]' : 'border-white/5 bg-white/[0.03] hover:bg-white/[0.06]')
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-2">

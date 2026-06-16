@@ -66,6 +66,8 @@ class ProcessingService:
 
     def resume_worker(self):
         ProcessingService._is_paused = False
+        if not ProcessingService._is_running:
+            self.start_worker()
 
     def stop_worker(self):
         ProcessingService._is_running = False
@@ -106,10 +108,19 @@ class ProcessingService:
 
     @staticmethod
     def _class_index(project_classes: List[str], name: str) -> int:
-        try:
-            return project_classes.index(name)
-        except ValueError:
-            return -1
+        def normalize_name(s: str) -> str:
+            return s.lower().strip().replace("_", " ").replace("-", " ")
+            
+        project_classes_norm = [normalize_name(c) for c in project_classes]
+        idx = ModelService._find_best_project_class_idx(name, project_classes_norm)
+        if idx is not None:
+            return idx
+            
+        lower_name = name.lower()
+        for i, c in enumerate(project_classes):
+            if c.lower() == lower_name:
+                return i
+        return -1
 
     @staticmethod
     def _parse_polygon(annotation: Annotation) -> List[List[float]]:
@@ -263,6 +274,34 @@ class ProcessingService:
             label_map = np.argmax(p_fused, axis=-1).astype(np.int32)
             confidence_map = np.max(p_fused, axis=-1)
 
+            # ---------- Edge-Aware Boundary Refinement (Guided-Filter CRF) ----------
+            # Instead of crude medianBlur, refine the probability map using the
+            # original image's edges as guidance, then re-derive the label map.
+            if orig_img is not None:
+                guide = cv2.cvtColor(orig_img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+                num_classes_fused = p_fused.shape[2]
+                refined_probs = np.zeros_like(p_fused)
+                try:
+                    for ch in range(num_classes_fused):
+                        refined_probs[:, :, ch] = cv2.ximgproc.guidedFilter(
+                            guide, p_fused[:, :, ch], radius=8, eps=1e-4
+                        )
+                except AttributeError:
+                    # Fallback if ximgproc not available: bilateral filter per channel
+                    for ch in range(num_classes_fused):
+                        prob_u8 = np.clip(p_fused[:, :, ch] * 255, 0, 255).astype(np.uint8)
+                        filtered = cv2.bilateralFilter(prob_u8, d=9, sigmaColor=75, sigmaSpace=75)
+                        refined_probs[:, :, ch] = filtered.astype(np.float32) / 255.0
+
+                # Re-normalize after filtering
+                sum_refined = np.sum(refined_probs, axis=-1, keepdims=True)
+                sum_refined = np.maximum(sum_refined, 1e-6)
+                refined_probs = refined_probs / sum_refined
+
+                label_map = np.argmax(refined_probs, axis=-1).astype(np.int32)
+                confidence_map = np.max(refined_probs, axis=-1)
+                p_fused = refined_probs  # use refined probs for downstream
+
             sam_regions = ModelService.generate_sam_regions(image.absolute_path, orig_h, orig_w)
             for region_id in np.unique(sam_regions):
                 region_mask = sam_regions == region_id
@@ -282,15 +321,44 @@ class ProcessingService:
 
             class_error_rates = self._class_error_rates(db)
 
-            label_map = cv2.medianBlur(label_map.astype(np.uint8), 5)
+            # ---------- Class-Aware Small-Region Handling ----------
+            # Use class-specific minimum area thresholds and merge small regions
+            # into their most common neighboring class instead of deleting them.
+            MIN_AREA_BY_CLASS = {
+                vehicle_idx: 30,      # vehicles are genuinely small in aerial views
+                self._class_index(project_classes, "shadow"): 50,
+            }
+            # Default minimums for common classes
+            building_idx_temp = self._class_index(project_classes, "building")
+            if building_idx_temp >= 0:
+                MIN_AREA_BY_CLASS[building_idx_temp] = 500
+            for name in ("road", "sidewalk", "bare_ground", "tree_cover", "water_body"):
+                idx = self._class_index(project_classes, name)
+                if idx >= 0:
+                    MIN_AREA_BY_CLASS.setdefault(idx, 200)
+            DEFAULT_MIN_AREA = 150
+
+            # Apply light median blur (kernel=3 instead of 5 for sharper edges)
+            label_map = cv2.medianBlur(label_map.astype(np.uint8), 3)
             num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(label_map, connectivity=8)
             shadow_idx = self._class_index(project_classes, "shadow")
 
             for label_id in range(1, num_labels):
-                if stats[label_id, cv2.CC_STAT_AREA] < 200:
-                    region_class = int(np.median(label_map[labels == label_id]))
-                    if region_class not in (shadow_idx, vehicle_idx):
-                        label_map[labels == label_id] = 0
+                area = stats[label_id, cv2.CC_STAT_AREA]
+                region_class = int(np.median(label_map[labels == label_id]))
+                min_area = MIN_AREA_BY_CLASS.get(region_class, DEFAULT_MIN_AREA)
+
+                if area < min_area:
+                    # Merge into the most common neighboring class instead of deleting
+                    region_mask_small = labels == label_id
+                    # Dilate the region to find its neighbors
+                    dilated = cv2.dilate(region_mask_small.astype(np.uint8), np.ones((5, 5), np.uint8))
+                    neighbor_mask = (dilated == 1) & (~region_mask_small)
+                    if np.any(neighbor_mask):
+                        neighbor_labels = label_map[neighbor_mask]
+                        most_common_neighbor = np.bincount(neighbor_labels).argmax()
+                        label_map[region_mask_small] = most_common_neighbor
+                    # else: keep as-is (isolated regions)
 
             building_idx = self._class_index(project_classes, "building")
             tree_idx = self._class_index(project_classes, "tree_cover")
@@ -402,22 +470,31 @@ class ProcessingService:
             for annotation in final_annotations_to_add:
                 class_stats[annotation.class_name] = class_stats.get(annotation.class_name, 0) + 1
 
+            # Gather class colors from project definition for overlay visualization
+            class_colors = [
+                project_class.color
+                for project_class in image.project.classes
+                if project_class.name.lower() != "unknown"
+            ] or [None] * len(project_classes)
+
             SegmentationArtifactService.save_mask_overlay(
                 image.project_id,
                 image,
                 label_map.astype(np.uint8),
                 project_classes,
+                class_colors=class_colors,
             )
             SegmentationArtifactService.save_confidence_map(image.project_id, image, confidence_map)
 
             avg_conf = float(np.mean(confidence_map))
             audit_block = (
                 f"**AERIAL PIPELINE AUDIT**\n"
-                f"- Mode: {'SegFormer-GPU' if ModelService.is_real_mode_active() else 'Simulation'}\n"
+                f"- Mode: {'SegFormer-b3 (fp16, multi-scale TTA)' if ModelService.is_real_mode_active() else 'Simulation'}\n"
                 f"- Tiling: {settings.TILE_SIZE}x{settings.TILE_SIZE}, overlap {settings.TILE_OVERLAP * 100}%\n"
                 f"- Tiles Processed: {len(tiles)}\n"
-                f"- Semantic masks only; no rectangular detector output\n"
-                f"- SAM Refinement Applied\n"
+                f"- Multi-scale inference: 3 scales × 2 orientations = 6 forward passes\n"
+                f"- Boundary refinement: Guided-filter CRF + SAM superpixel regions\n"
+                f"- Small-region handling: Class-aware thresholds + neighbor merging\n"
                 f"- Class stats: {class_stats}\n"
             )
             if feedback_notes:
@@ -481,11 +558,22 @@ class ProcessingService:
             .all()
         )
 
+        if not images:
+            return 0
+
+        image_ids = [img.id for img in images]
+        
+        # Get all existing queue items in one query
+        existing_items = db.query(ProcessingQueue).filter(ProcessingQueue.image_id.in_(image_ids)).all()
+        existing_map = {item.image_id: item for item in existing_items}
+
+        new_queue_items = []
         count = 0
+
         for image in images:
-            existing = db.query(ProcessingQueue).filter(ProcessingQueue.image_id == image.id).first()
+            existing = existing_map.get(image.id)
             if not existing:
-                db.add(ProcessingQueue(image_id=image.id))
+                new_queue_items.append(ProcessingQueue(image_id=image.id))
                 count += 1
             elif existing.status in ["completed", "failed"]:
                 existing.status = "pending"
@@ -494,7 +582,15 @@ class ProcessingService:
 
             image.status = "pending"
 
-        db.commit()
+        if new_queue_items:
+            db.bulk_save_objects(new_queue_items)
+
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            # If a race condition still somehow happens, ignore it since it means they are already in the queue
+            pass
 
         service = ProcessingService()
         service.start_worker()

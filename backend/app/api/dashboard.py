@@ -25,7 +25,10 @@ def get_dashboard_stats(project_id: int, db: Session = Depends(get_db)):
     review_tasks_corrected = db.query(Image).filter(Image.project_id == project_id, Image.correction_count > 0).count()
     review_tasks_pending = db.query(Image).filter(Image.project_id == project_id, Image.review_status == "pending_review").count()
     review_tasks_rejected = db.query(Image).filter(Image.project_id == project_id, Image.review_status == "rejected").count()
-    queue_size = db.query(ProcessingQueue).filter(ProcessingQueue.status == "pending").count()
+    queue_size = db.query(ProcessingQueue).join(Image).filter(
+        Image.project_id == project_id,
+        ProcessingQueue.status == "pending"
+    ).count()
     
     # Averages
     avg_conf = db.query(func.avg(Image.confidence)).filter(Image.project_id == project_id, Image.confidence.isnot(None)).scalar() or 0.0

@@ -21,10 +21,16 @@ def load_aerial_ontology() -> list:
 class Settings(BaseSettings):
     PROJECT_NAME: str = "AI-Powered Aerial Infrastructure Dataset Platform"
     API_V1_STR: str = "/api/v1"
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./sql_app.db")
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        f"sqlite:///{os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'sql_app.db')}"
+    )
 
     # Storage settings
-    DATA_DIR: str = os.getenv("DATA_DIR", "./data")
+    DATA_DIR: str = os.getenv(
+        "DATA_DIR",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
+    )
     THUMBNAIL_SIZE: tuple = (256, 256)
 
     # Tiling
@@ -36,7 +42,7 @@ class Settings(BaseSettings):
     SUPPORTED_EXTENSIONS: set = {
         ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".geotiff", ".bmp", ".webp"
     }
-    USE_REAL_MODELS: bool = os.getenv("USE_REAL_MODELS", "false").lower() == "true"
+    USE_REAL_MODELS: bool = os.getenv("USE_REAL_MODELS", "true").lower() == "true"
     MAX_CONCURRENCY: int = int(os.getenv("MAX_CONCURRENCY", "4"))
 
     # Remote H200 inference (optional)
