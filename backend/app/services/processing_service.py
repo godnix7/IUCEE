@@ -287,10 +287,11 @@ class ProcessingService:
                             guide, p_fused[:, :, ch], radius=8, eps=1e-4
                         )
                 except AttributeError:
-                    # Fallback if ximgproc not available: bilateral filter per channel
+                    # Fallback if ximgproc not available: Strong Gaussian blur to eliminate 8x8 blocky interpolation artifacts
                     for ch in range(num_classes_fused):
                         prob_u8 = np.clip(p_fused[:, :, ch] * 255, 0, 255).astype(np.uint8)
-                        filtered = cv2.bilateralFilter(prob_u8, d=9, sigmaColor=75, sigmaSpace=75)
+                        # A 21x21 Gaussian blur completely smooths out the boxy artifacts
+                        filtered = cv2.GaussianBlur(prob_u8, (21, 21), 0)
                         refined_probs[:, :, ch] = filtered.astype(np.float32) / 255.0
 
                 # Re-normalize after filtering
@@ -302,12 +303,7 @@ class ProcessingService:
                 confidence_map = np.max(refined_probs, axis=-1)
                 p_fused = refined_probs  # use refined probs for downstream
 
-            sam_regions = ModelService.generate_sam_regions(image.absolute_path, orig_h, orig_w)
-            for region_id in np.unique(sam_regions):
-                region_mask = sam_regions == region_id
-                region_labels = label_map[region_mask]
-                if len(region_labels) > 0:
-                    label_map[region_mask] = np.bincount(region_labels).argmax()
+            # Removed SAM superpixel fallback which was creating 30x30 grid boxes
 
             vehicle_idx = self._class_index(project_classes, "vehicle")
             road_idx = self._class_index(project_classes, "road")
@@ -430,12 +426,10 @@ class ProcessingService:
                     if class_name_temp in class_error_rates and class_error_rates[class_name_temp] > 0.5:
                         region_conf = max(0.1, region_conf - settings.ACTIVE_LEARNING_PENALTY)
 
-                    epsilon = 0.002 * cv2.arcLength(contour, True)
-                    approx = cv2.approxPolyDP(contour, epsilon, True)
-                    if len(approx) < 3:
+                    if len(contour) < 3:
                         continue
 
-                    polygon = [[float(point[0][0]), float(point[0][1])] for point in approx]
+                    polygon = [[float(point[0][0]), float(point[0][1])] for point in contour]
                     x, y, width, height = cv2.boundingRect(contour)
                     region_probs = p_fused[mask_contour == 255]
                     if len(region_probs) > 0:

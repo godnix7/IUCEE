@@ -97,12 +97,6 @@ class SegmentationArtifactService:
             mask = label_map == idx
             b, g, r = palette[idx]
             rgba_mask[mask] = [b, g, r, 115]
-            
-        # Draw class boundary contours (100% opaque white)
-        for idx in range(len(project_classes)):
-            class_mask = (label_map == idx).astype(np.uint8) * 255
-            contours, _ = cv2.findContours(class_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(rgba_mask, contours, -1, (255, 255, 255, 255), 1, cv2.LINE_AA)
 
         overlay_path = os.path.join(overlay_dir, f"{image.id}_overlay.png")
         cv2.imwrite(overlay_path, rgba_mask)
