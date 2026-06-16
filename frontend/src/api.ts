@@ -74,16 +74,20 @@ export const api = {
       if (!res.ok) throw new Error('Failed to fetch annotations');
       return res.json();
     },
-    markViewed: async (projectId: number, imageId: number) => {
-      const res = await fetch(`${API_BASE_URL}/review/${projectId}/images/${imageId}/mark-viewed`, { method: 'POST' });
+    markViewed: async (projectId: number, imageId: number, notes = '') => {
+      const res = await fetch(`${API_BASE_URL}/review/${projectId}/images/${imageId}/mark-viewed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewer: 'manual_review', notes })
+      });
       if (!res.ok) throw new Error('Failed to mark viewed');
       return res.json();
     },
-    correct: async (projectId: number, imageId: number, annotations: any[]) => {
+    correct: async (projectId: number, imageId: number, annotations: any[], notes = '') => {
       const res = await fetch(`${API_BASE_URL}/review/${projectId}/images/${imageId}/correct`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations })
+        body: JSON.stringify({ annotations, reviewer: 'manual_review', notes })
       });
       if (!res.ok) throw new Error('Failed to save corrections');
       return res.json();

@@ -1,6 +1,4 @@
-// No unused imports
-
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Play, Pause, Square, Activity, Info, Check } from 'lucide-react';
 import { api } from '../../api';
 
@@ -241,11 +239,11 @@ export default function DashboardView({ project, stats, onStatsUpdate }: { proje
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <StatCard title="Total Images" value={stats.total_images} color="text-white" />
-        <StatCard title="LS Tasks Sent" value={stats.ls_tasks_sent || 0} color="text-blue-400" />
-        <StatCard title="LS Tasks Reviewed" value={stats.ls_tasks_reviewed || 0} color="text-emerald-400" />
-        <StatCard title="LS Tasks Corrected" value={stats.ls_tasks_corrected || 0} color="text-amber-400" />
+        <StatCard title="Review Tasks Sent" value={stats.review_tasks_sent || 0} color="text-blue-400" />
+        <StatCard title="Human Reviewed" value={stats.review_tasks_reviewed || 0} color="text-emerald-400" />
+        <StatCard title="Human Corrected" value={stats.review_tasks_corrected || 0} color="text-amber-400" />
         
-        <StatCard title="LS Tasks Pending" value={stats.ls_tasks_pending || 0} color="text-orange-400" />
+        <StatCard title="Review Pending" value={stats.review_tasks_pending || 0} color="text-orange-400" />
         <StatCard title="Images Processed" value={stats.processed_images} color="text-primary" />
         <StatCard title="Images Remaining" value={stats.remaining_images} color="text-accent" />
         <StatCard title="Avg Confidence" value={`${(stats.avg_confidence * 100).toFixed(1)}%`} color="text-secondary" />

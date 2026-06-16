@@ -80,11 +80,13 @@ class DashboardStats(BaseModel):
     total_images: int
     processed_images: int
     remaining_images: int
+    queue_size: int
     
-    ls_tasks_sent: int
-    ls_tasks_reviewed: int
-    ls_tasks_corrected: int
-    ls_tasks_pending: int
+    review_tasks_sent: int
+    review_tasks_reviewed: int
+    review_tasks_corrected: int
+    review_tasks_pending: int
+    review_tasks_rejected: int
     
     avg_confidence: float
     class_distribution: Dict[str, int]

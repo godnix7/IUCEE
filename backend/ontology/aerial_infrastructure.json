@@ -1,0 +1,18 @@
+[
+  {"name": "road", "color": "#3b82f6", "shortcut_key": "1"},
+  {"name": "building", "color": "#ef4444", "shortcut_key": "2"},
+  {"name": "school", "color": "#f59e0b", "shortcut_key": "3"},
+  {"name": "hospital", "color": "#dc2626", "shortcut_key": "4"},
+  {"name": "electrical_substation", "color": "#eab308", "shortcut_key": "5"},
+  {"name": "water_tank", "color": "#06b6d4", "shortcut_key": "6"},
+  {"name": "water_body", "color": "#0ea5e9", "shortcut_key": "7"},
+  {"name": "tree_cover", "color": "#22c55e", "shortcut_key": "8"},
+  {"name": "slum_area", "color": "#a855f7", "shortcut_key": "9"},
+  {"name": "construction_area", "color": "#f97316", "shortcut_key": "0"},
+  {"name": "parking_area", "color": "#8b5cf6", "shortcut_key": "q"},
+  {"name": "public_building", "color": "#6366f1", "shortcut_key": "w"},
+  {"name": "vehicle", "color": "#fde047", "shortcut_key": "e"},
+  {"name": "sidewalk", "color": "#94a3b8", "shortcut_key": "r"},
+  {"name": "bare_ground", "color": "#d97706", "shortcut_key": "t"},
+  {"name": "shadow", "color": "#334155", "shortcut_key": "y"}
+]

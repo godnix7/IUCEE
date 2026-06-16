@@ -1,24 +1,33 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models import Project, Image, ReviewLog, ProcessingQueue, Annotation
+from app.models import Image, ReviewLog, ProcessingQueue, Annotation
 from app.schemas import Image as ImageSchema, RejectRequest, Annotation as AnnotationSchema
+from app.services.active_learning import ActiveLearningService
 
 router = APIRouter()
 
 class CorrectionRequest(BaseModel):
     annotations: List[Dict[str, Any]]
+    reviewer: str = "manual_review"
+    notes: Optional[str] = None
+
+class ApprovalRequest(BaseModel):
+    reviewer: str = "manual_review"
+    notes: Optional[str] = None
 
 @router.get("/{project_id}/review-queue", response_model=List[ImageSchema])
 def get_review_queue(project_id: int, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
-    # Returns all images that have not yet been reviewed at least once
     images = db.query(Image).filter(
         Image.project_id == project_id,
         Image.status == "completed",
-        Image.review_status == "pending_review"
+        Image.review_status == "pending_review",
+        Image.is_corrupt == False,
+        Image.is_duplicate == False,
     ).order_by(Image.id.asc()).offset(skip).limit(limit).all()
     return images
 
@@ -28,10 +37,11 @@ def get_debug_images(project_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{project_id}/force-populate")
 def force_populate_queue(project_id: int, db: Session = Depends(get_db)):
-    # Move all completed images to pending_review
     images = db.query(Image).filter(
         Image.project_id == project_id,
-        Image.status == "completed"
+        Image.status == "completed",
+        Image.is_corrupt == False,
+        Image.is_duplicate == False,
     ).all()
     
     count = 0
@@ -42,29 +52,32 @@ def force_populate_queue(project_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"message": f"Forced {count} images into pending_review queue"}
 
+@router.get("/{project_id}/confusion-matrix")
+def get_confusion_matrix(project_id: int, db: Session = Depends(get_db)):
+    return ActiveLearningService.get_confusion_matrix(db, project_id)
+
 @router.get("/{project_id}/images/{image_id}/annotations", response_model=List[AnnotationSchema])
 def get_annotations(project_id: int, image_id: int, db: Session = Depends(get_db)):
     annotations = db.query(Annotation).filter(Annotation.image_id == image_id).all()
     return annotations
 
 @router.post("/{project_id}/images/{image_id}/mark-viewed")
-def mark_image_viewed(project_id: int, image_id: int, db: Session = Depends(get_db)):
+def mark_image_viewed(project_id: int, image_id: int, req: ApprovalRequest = ApprovalRequest(), db: Session = Depends(get_db)):
     image = db.query(Image).filter(Image.id == image_id, Image.project_id == project_id).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
         
     from datetime import datetime
     image.last_viewed = datetime.utcnow()
-    image.reviewer = "default_reviewer"
+    image.reviewer = req.reviewer
     
     if image.review_status == "pending_review":
         image.review_status = "reviewed"
         
-        # Log auto-acceptance by reviewer
         db.add(ReviewLog(
             image_id=image.id,
-            action="reviewed",
-            notes="Image viewed in review queue"
+            action="approved",
+            notes=req.notes or "Human approved without correction"
         ))
         db.commit()
     else:
@@ -77,21 +90,26 @@ def correct_image(project_id: int, image_id: int, req: CorrectionRequest, db: Se
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    image.review_status = "human_corrected"
-    image.correction_count = (image.correction_count or 0) + 1
-
-    # Get old annotations to track confusion
     old_annotations = db.query(Annotation).filter(Annotation.image_id == image_id).all()
-    predicted_class = old_annotations[0].class_name if old_annotations else None
+    corrections = ActiveLearningService.process_manual_corrections(
+        db,
+        image.project,
+        image,
+        old_annotations,
+        req.annotations,
+        reviewer=req.reviewer,
+    )
 
-    # Delete existing annotations and replace with corrected ones
     for ann in old_annotations:
         db.delete(ann)
     
+    import json
     actual_class = None
     for ann_data in req.annotations:
-        import json
         new_class = ann_data.get("class_name")
+        segmentation = ann_data.get("segmentation", [])
+        if not new_class or len(segmentation) < 3:
+            continue
         if not actual_class:
             actual_class = new_class
         new_ann = Annotation(
@@ -107,13 +125,15 @@ def correct_image(project_id: int, image_id: int, req: CorrectionRequest, db: Se
     db.add(ReviewLog(
         image_id=image.id,
         action="corrected",
-        notes="Human corrected",
-        predicted_class=predicted_class,
+        notes=req.notes or f"Human corrected {corrections} region(s) via manual review",
         actual_class=actual_class
     ))
 
+    image.review_status = "human_corrected"
+    image.correction_count = (image.correction_count or 0) + corrections
+    image.reviewer = req.reviewer
     db.commit()
-    return {"status": "ok"}
+    return {"status": "ok", "corrections_logged": corrections}
 
 @router.post("/{project_id}/images/{image_id}/reject")
 def reject_image(project_id: int, image_id: int, req: RejectRequest, db: Session = Depends(get_db)):
@@ -125,8 +145,26 @@ def reject_image(project_id: int, image_id: int, req: RejectRequest, db: Session
     image.rejection_reason = req.reason
     image.reviewer_notes = req.notes
     image.retry_count = (image.retry_count or 0) + 1
+
+    old_annotations = db.query(Annotation).filter(Annotation.image_id == image.id).all()
+    for ann in old_annotations:
+        ActiveLearningService.log_correction(
+            db,
+            image,
+            predicted_class=ann.class_name,
+            corrected_class=req.reason,
+            correction_type="rejected_for_relabel",
+            region_id=str(ann.id),
+            confidence=ann.confidence,
+            reviewer="manual_review",
+            original_json={
+                "class_name": ann.class_name,
+                "segmentation": ann.segmentation_json,
+                "bbox": ann.bbox_json,
+            },
+            corrected_json={"reason": req.reason, "notes": req.notes},
+        )
     
-    # Log rejection
     db.add(ReviewLog(
         image_id=image.id,
         action="rejected",
@@ -134,10 +172,10 @@ def reject_image(project_id: int, image_id: int, req: RejectRequest, db: Session
         notes=req.notes
     ))
     
-    # Optionally auto-enqueue for relabeling if needed by project settings
     existing_q = db.query(ProcessingQueue).filter(ProcessingQueue.image_id == image.id).first()
     if existing_q:
         existing_q.status = "pending"
+        existing_q.attempt_number = 1
     else:
         db.add(ProcessingQueue(image_id=image.id))
         
@@ -145,5 +183,3 @@ def reject_image(project_id: int, image_id: int, req: RejectRequest, db: Session
     
     db.commit()
     return {"message": "Image rejected and queued for relabeling"}
-
-

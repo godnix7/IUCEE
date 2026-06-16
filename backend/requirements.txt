@@ -11,5 +11,3 @@ requests
 pillow
 transformers
 accelerate
-# Optional: label-studio (only needed if you want the external Label Studio server)
-# label-studio

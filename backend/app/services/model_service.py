@@ -7,14 +7,14 @@ from typing import Dict, Any, List, Optional
 # Maps ADE20K / general segmentation labels to the project's aerial ontology.
 ADE_TO_AERIAL: Dict[str, str] = {
     "road": "road",
-    "sidewalk": "sidewalk_path",
-    "path": "sidewalk_path",
-    "building": "building_rooftop",
-    "house": "building_rooftop",
-    "skyscraper": "building_rooftop",
-    "grandstand": "building_rooftop",
-    "parking lot": "parking_lot",
-    "parking": "parking_lot",
+    "sidewalk": "sidewalk",
+    "path": "sidewalk",
+    "building": "building",
+    "house": "building",
+    "skyscraper": "building",
+    "grandstand": "building",
+    "parking lot": "parking_area",
+    "parking": "parking_area",
     "car": "vehicle",
     "bus": "vehicle",
     "truck": "vehicle",
@@ -22,18 +22,18 @@ ADE_TO_AERIAL: Dict[str, str] = {
     "minibus": "vehicle",
     "bicycle": "vehicle",
     "motorcycle": "vehicle",
-    "grass": "low_vegetation",
-    "plant": "low_vegetation",
-    "field": "low_vegetation",
-    "flower": "low_vegetation",
-    "tree": "tree_canopy",
-    "palm": "tree_canopy",
-    "water": "water",
-    "river": "water",
-    "sea": "water",
-    "lake": "water",
-    "swimming pool": "water",
-    "pool": "water",
+    "grass": "bare_ground",
+    "plant": "tree_cover",
+    "field": "bare_ground",
+    "flower": "tree_cover",
+    "tree": "tree_cover",
+    "palm": "tree_cover",
+    "water": "water_body",
+    "river": "water_body",
+    "sea": "water_body",
+    "lake": "water_body",
+    "swimming pool": "water_body",
+    "pool": "water_body",
     "dirt": "bare_ground",
     "sand": "bare_ground",
     "earth": "bare_ground",
@@ -41,8 +41,8 @@ ADE_TO_AERIAL: Dict[str, str] = {
     "land": "bare_ground",
     "runway": "road",
     "bridge": "road",
-    "construction": "construction",
-    "scaffolding": "construction",
+    "construction": "construction_area",
+    "scaffolding": "construction_area",
 }
 
 
@@ -193,7 +193,7 @@ class ModelService:
 
         num_classes = len(project_classes)
         class_to_idx = {name: idx for idx, name in enumerate(project_classes)}
-        unknown_idx = class_to_idx.get("unknown", num_classes - 1)
+        fallback_idx = class_to_idx.get("bare_ground", class_to_idx.get("road", 0))
         fused = np.full((orig_h, orig_w, num_classes), 1e-4, dtype=np.float32)
 
         id2label = ModelService._segformer_model.config.id2label
@@ -203,7 +203,7 @@ class ModelService:
             if aerial_name and aerial_name in class_to_idx:
                 target_idx = class_to_idx[aerial_name]
             else:
-                target_idx = unknown_idx
+                target_idx = fallback_idx
             fused[:, :, target_idx] += probs_ade[ade_idx]
 
         fused = fused / np.sum(fused, axis=-1, keepdims=True)
@@ -238,8 +238,13 @@ class ModelService:
         return ModelService._generate_simulated_prob_map(image_path, num_classes, noise_level=0.8, base_seed=43)
 
     @staticmethod
-    def generate_pointrend_probs(image_path: str, num_classes: int) -> np.ndarray:
+    def generate_boundary_refinement_probs(image_path: str, num_classes: int) -> np.ndarray:
         return ModelService._generate_simulated_prob_map(image_path, num_classes, noise_level=1.2, base_seed=44)
+
+    @staticmethod
+    def generate_pointrend_probs(image_path: str, num_classes: int) -> np.ndarray:
+        """Deprecated alias — use generate_boundary_refinement_probs."""
+        return ModelService.generate_boundary_refinement_probs(image_path, num_classes)
 
     @staticmethod
     def generate_sam_regions(image_path: str, scale_h: int, scale_w: int) -> np.ndarray:

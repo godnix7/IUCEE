@@ -2,13 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 import os
-import glob
 from pathlib import Path
 
+from fastapi.responses import FileResponse
+
 from app.core.database import get_db
-from app.models import Project, ProjectClass, Image
+from app.models import Project, ProjectClass, Image, ProcessingQueue
 from app.schemas import Project as ProjectSchema, ProjectCreate
 from app.core.config import settings
+from app.services.import_service import ImportService
 
 router = APIRouter()
 
@@ -27,11 +29,9 @@ def select_folder():
 
 @router.post("/", response_model=ProjectSchema)
 def create_project(project_in: ProjectCreate, db: Session = Depends(get_db)):
-    # Verify folder path
     if not os.path.exists(project_in.root_path):
         raise HTTPException(status_code=400, detail="Root path does not exist")
 
-    # Create project
     project = Project(
         name=project_in.name,
         description=project_in.description,
@@ -40,54 +40,30 @@ def create_project(project_in: ProjectCreate, db: Session = Depends(get_db)):
     db.add(project)
     db.flush()
 
-    # Add classes from fixed ontology
-    for cls in settings.DEFAULT_AERIAL_CLASSES:
-        db.add(ProjectClass(
-            project_id=project.id,
-            name=cls["name"],
-            color=cls["color"],
-            shortcut_key=cls["shortcut_key"]
-        ))
+    custom_classes = None
+    if project_in.classes:
+        custom_classes = [c.model_dump() for c in project_in.classes]
 
-    # Auto Dataset Discovery
-    root_dir = Path(project_in.root_path)
-    extensions = settings.SUPPORTED_EXTENSIONS
-    
-    discovered_images = []
-    
-    # Recursively find all supported images
-    for root, _, files in os.walk(root_dir):
-        for file in files:
-            ext = os.path.splitext(file)[1].lower()
-            if ext in extensions:
-                abs_path = os.path.join(root, file)
-                rel_path = os.path.relpath(abs_path, root_dir)
-                # Basic size info
-                file_size = os.path.getsize(abs_path)
-                
-                # Use PIL for extremely fast header-only dimension extraction
-                try:
-                    from PIL import Image as PILImage
-                    with PILImage.open(abs_path) as img:
-                        w, h = img.size
-                except Exception:
-                    w, h = 0, 0
-                
-                discovered_images.append(Image(
-                    project_id=project.id,
-                    filename=file,
-                    relative_path=rel_path,
-                    absolute_path=abs_path,
-                    width=w,
-                    height=h,
-                    file_size_bytes=file_size,
-                    status="pending",
-                    review_status="accepted"
-                ))
-    
-    if discovered_images:
-        db.add_all(discovered_images)
-        
+    import_stats = ImportService.index_project_folder(
+        db, project, project_in.root_path, custom_classes=custom_classes
+    )
+
+    # Create processing queue entries for valid images (worker starts on demand)
+    valid_images = db.query(Image).filter(
+        Image.project_id == project.id,
+        Image.is_corrupt == False,
+        Image.is_duplicate == False,
+        Image.status == "pending",
+    ).all()
+    for img in valid_images:
+        db.add(ProcessingQueue(image_id=img.id))
+    db.commit()
+
+    db.refresh(project)
+    project.description = (
+        f"{project_in.description or ''} | Import: {import_stats['valid']} valid, "
+        f"{import_stats['duplicates']} duplicates, {import_stats['corrupt']} corrupt"
+    ).strip(" |")
     db.commit()
     db.refresh(project)
     return project
@@ -103,16 +79,46 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
+@router.get("/{project_id}/import-stats")
+def get_import_stats(project_id: int, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    total = db.query(Image).filter(Image.project_id == project_id).count()
+    corrupt = db.query(Image).filter(Image.project_id == project_id, Image.is_corrupt == True).count()
+    duplicates = db.query(Image).filter(Image.project_id == project_id, Image.is_duplicate == True).count()
+    valid = total - corrupt
+
+    return {
+        "total": total,
+        "valid": valid - duplicates,
+        "duplicates": duplicates,
+        "corrupt": corrupt,
+    }
 
 @router.get("/{project_id}/images/{image_id}/file")
 def get_image_file(project_id: int, image_id: int, db: Session = Depends(get_db)):
-    from fastapi.responses import FileResponse
     image = db.query(Image).filter(Image.id == image_id, Image.project_id == project_id).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
     if not os.path.exists(image.absolute_path):
         raise HTTPException(status_code=404, detail="Original file missing from disk")
     return FileResponse(image.absolute_path)
+
+@router.get("/{project_id}/images/{image_id}/thumbnail")
+def get_image_thumbnail(project_id: int, image_id: int, db: Session = Depends(get_db)):
+    image = db.query(Image).filter(Image.id == image_id, Image.project_id == project_id).first()
+    if not image or not image.thumbnail_path or not os.path.exists(image.thumbnail_path):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    return FileResponse(image.thumbnail_path)
+
+@router.get("/{project_id}/images/{image_id}/mask-overlay")
+def get_mask_overlay(project_id: int, image_id: int, db: Session = Depends(get_db)):
+    image = db.query(Image).filter(Image.id == image_id, Image.project_id == project_id).first()
+    if not image or not image.mask_path or not os.path.exists(image.mask_path):
+        raise HTTPException(status_code=404, detail="Mask overlay not found")
+    return FileResponse(image.mask_path)
 
 from pydantic import BaseModel
 class CleanupRequest(BaseModel):
@@ -132,12 +138,11 @@ def cleanup_project(project_id: int, req: CleanupRequest, db: Session = Depends(
     elif req.target == "rejected":
         query = query.filter(Image.review_status == "rejected")
     elif req.target == "completed_queue":
-        from app.models import ProcessingQueue
         db.query(ProcessingQueue).filter(ProcessingQueue.status == "completed").delete()
         db.commit()
         return {"message": "Completed processing queue cleared."}
     elif req.target == "all":
-        pass # All images
+        pass
     else:
         raise HTTPException(status_code=400, detail="Invalid cleanup target")
         

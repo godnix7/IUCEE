@@ -4,12 +4,14 @@ from fastapi.staticfiles import StaticFiles
 import os
 
 from app.core.config import settings
-from app.core.database import engine, Base
+from app.core.database import engine, Base, check_and_migrate_db
 from app.api import projects, labeling, review, dashboard, exports
 from app.services.processing_service import ProcessingService
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+check_and_migrate_db(engine, Base)
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -52,4 +54,4 @@ def startup_event():
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to AI Pixel Annotation Studio API"}
+    return {"message": "Welcome to AI-Powered Aerial Infrastructure Dataset Platform API"}

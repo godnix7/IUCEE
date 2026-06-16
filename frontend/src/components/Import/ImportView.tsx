@@ -1,24 +1,16 @@
 import React, { useState } from 'react';
-import { Upload, Folder, Plus, X } from 'lucide-react';
+import { Upload, Folder } from 'lucide-react';
 import { api } from '../../api';
 
 export default function ImportView({ onProjectCreated }: { onProjectCreated: (p: any) => void }) {
   const [name, setName] = useState('');
   const [path, setPath] = useState('C:\\Nischay\\PROJECTS\\IUCEEE\\Dataset'); // Default placeholder
-  const [classes, setClasses] = useState([
+  const classes = [
     { name: 'Building', color: '#3b82f6', shortcut_key: '1' },
     { name: 'Road', color: '#8b5cf6', shortcut_key: '2' }
-  ]);
+  ];
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  const handleAddClass = () => {
-    setClasses([...classes, { name: 'New Class', color: '#10b981', shortcut_key: String(classes.length + 1) }]);
-  };
-
-  const handleRemoveClass = (index: number) => {
-    setClasses(classes.filter((_, i) => i !== index));
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,7 +109,7 @@ export default function ImportView({ onProjectCreated }: { onProjectCreated: (p:
           </div>
           <p className="text-sm text-textMuted mb-4">
             The system uses a strictly defined schema for production-quality aerial segmentation. 
-            Supported classes: Building Rooftop, Road, Parking Lot, Vehicle, Low Vegetation, Tree Canopy, Water, Bare Ground, Shadow, Construction, Sidewalk/Path, Unknown.
+            Supported classes include roads, buildings, schools, hospitals, substations, water assets, vegetation, vehicles, sidewalks, bare ground, shadows, and construction areas.
           </p>
         </div>
 

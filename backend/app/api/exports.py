@@ -47,7 +47,7 @@ def generate_retraining_package(project_id: int, db: Session = Depends(get_db)):
     # Locate the active learning dataset
     dataset_dir = os.path.join(project.root_path, "corrections_dataset")
     if not os.path.exists(dataset_dir) or not os.listdir(dataset_dir):
-        raise HTTPException(status_code=404, detail="No human corrections found yet. Please correct some labels in Label Studio first.")
+        raise HTTPException(status_code=404, detail="No human corrections found yet. Please correct labels in the manual review screen first.")
         
     # Zip it
     export_dir = os.path.join(os.getcwd(), "data", "exports")

@@ -10,6 +10,7 @@ class Project(Base):
     name = Column(String, index=True)
     description = Column(String, nullable=True)
     root_path = Column(String)
+    ls_project_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     classes = relationship("ProjectClass", back_populates="project", cascade="all, delete-orphan")
@@ -49,7 +50,12 @@ class Image(Base):
     agreement_score = Column(Float, nullable=True)
     
     mask_path = Column(String, nullable=True)
+    confidence_map_path = Column(String, nullable=True)
     thumbnail_path = Column(String, nullable=True)
+    file_hash = Column(String, nullable=True, index=True)
+    is_duplicate = Column(Boolean, default=False)
+    duplicate_of_id = Column(Integer, ForeignKey("images.id"), nullable=True)
+    is_corrupt = Column(Boolean, default=False)
     
     rejection_reason = Column(String, nullable=True)
     reviewer_notes = Column(Text, nullable=True)
@@ -65,6 +71,7 @@ class Image(Base):
     annotations = relationship("Annotation", back_populates="image", cascade="all, delete-orphan")
     processing_queue = relationship("ProcessingQueue", back_populates="image", uselist=False, cascade="all, delete-orphan")
     review_logs = relationship("ReviewLog", back_populates="image", cascade="all, delete-orphan")
+    tiles = relationship("ImageTile", back_populates="image", cascade="all, delete-orphan")
 
 class Annotation(Base):
     __tablename__ = "annotations"
@@ -137,3 +144,18 @@ class PredictionVsCorrection(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     image = relationship("Image")
+
+
+class ImageTile(Base):
+    __tablename__ = "image_tiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    image_id = Column(Integer, ForeignKey("images.id"), index=True)
+    tile_index = Column(Integer)
+    x = Column(Integer)
+    y = Column(Integer)
+    width = Column(Integer)
+    height = Column(Integer)
+    metadata_json = Column(Text, nullable=True)
+
+    image = relationship("Image", back_populates="tiles")

@@ -19,11 +19,13 @@ def get_dashboard_stats(project_id: int, db: Session = Depends(get_db)):
     processed_images = db.query(Image).filter(Image.project_id == project_id, Image.status == "completed").count()
     remaining_images = db.query(Image).filter(Image.project_id == project_id, Image.status.in_(["pending", "processing"])).count()
     
-    # Label Studio metrics
-    ls_tasks_sent = db.query(Image).filter(Image.project_id == project_id, Image.ls_task_id.isnot(None)).count()
-    ls_tasks_reviewed = db.query(Image).filter(Image.project_id == project_id, Image.review_status == "human_corrected").count()
-    ls_tasks_corrected = db.query(Image).filter(Image.project_id == project_id, Image.correction_count > 0).count()
-    ls_tasks_pending = db.query(Image).filter(Image.project_id == project_id, Image.review_status == "pending_review").count()
+    # Human review metrics
+    review_tasks_sent = db.query(Image).filter(Image.project_id == project_id, Image.status == "completed").count()
+    review_tasks_reviewed = db.query(Image).filter(Image.project_id == project_id, Image.review_status.in_(["reviewed", "human_corrected"])).count()
+    review_tasks_corrected = db.query(Image).filter(Image.project_id == project_id, Image.correction_count > 0).count()
+    review_tasks_pending = db.query(Image).filter(Image.project_id == project_id, Image.review_status == "pending_review").count()
+    review_tasks_rejected = db.query(Image).filter(Image.project_id == project_id, Image.review_status == "rejected").count()
+    queue_size = db.query(ProcessingQueue).filter(ProcessingQueue.status == "pending").count()
     
     # Averages
     avg_conf = db.query(func.avg(Image.confidence)).filter(Image.project_id == project_id, Image.confidence.isnot(None)).scalar() or 0.0
@@ -56,10 +58,12 @@ def get_dashboard_stats(project_id: int, db: Session = Depends(get_db)):
         total_images=total_images,
         processed_images=processed_images,
         remaining_images=remaining_images,
-        ls_tasks_sent=ls_tasks_sent,
-        ls_tasks_reviewed=ls_tasks_reviewed,
-        ls_tasks_corrected=ls_tasks_corrected,
-        ls_tasks_pending=ls_tasks_pending,
+        queue_size=queue_size,
+        review_tasks_sent=review_tasks_sent,
+        review_tasks_reviewed=review_tasks_reviewed,
+        review_tasks_corrected=review_tasks_corrected,
+        review_tasks_pending=review_tasks_pending,
+        review_tasks_rejected=review_tasks_rejected,
         avg_confidence=float(avg_conf),
         class_distribution=class_dist,
         engine_state=ProcessingService.get_state(),
