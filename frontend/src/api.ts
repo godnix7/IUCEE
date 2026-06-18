@@ -37,8 +37,12 @@ export const api = {
     }
   },
   labeling: {
-    autoLabelAll: async (projectId: number) => {
-      const res = await fetch(`${API_BASE_URL}/labeling/${projectId}/auto-label`, { method: 'POST' });
+    autoLabelAll: async (projectId: number, modelName?: string) => {
+      const res = await fetch(`${API_BASE_URL}/labeling/${projectId}/auto-label`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_name: modelName || "nvidia/segformer-b3-finetuned-ade-512-512" })
+      });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },

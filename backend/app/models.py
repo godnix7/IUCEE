@@ -98,6 +98,8 @@ class ProcessingQueue(Base):
     # pending, processing, completed, failed
     status = Column(String, default="pending", index=True)
     
+    model_name = Column(String, default="nvidia/segformer-b3-finetuned-ade-512-512")
+    
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     error_message = Column(Text, nullable=True)

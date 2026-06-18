@@ -35,7 +35,10 @@ def check_and_migrate_db(engine, Base):
                         null_str = "" if column.nullable else " NOT NULL"
                         default_str = ""
                         if column.default is not None and not callable(column.default.arg):
-                            default_str = f" DEFAULT {column.default.arg}"
+                            if isinstance(column.default.arg, str):
+                                default_str = f" DEFAULT '{column.default.arg}'"
+                            else:
+                                default_str = f" DEFAULT {column.default.arg}"
                         
                         alter_query = f"ALTER TABLE {table_name} ADD COLUMN {column.name} {col_type}{null_str}{default_str}"
                         print(f"Migrating database: Running '{alter_query}'")

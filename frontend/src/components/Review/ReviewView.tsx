@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
   Check,
   ChevronLeft,
@@ -11,6 +12,7 @@ import {
   Save,
   Trash2,
   X,
+  Keyboard
 } from 'lucide-react';
 import { api } from '../../api';
 
@@ -34,6 +36,7 @@ type EditableAnnotation = {
   segmentation: number[][];
   bbox?: any;
   deleted?: boolean;
+  model_source?: string;
 };
 
 export default function ReviewView({ project }: ReviewViewProps) {
@@ -54,6 +57,7 @@ export default function ReviewView({ project }: ReviewViewProps) {
   const [rejectionClass, setRejectionClass] = useState(reviewClasses[0]?.name || '');
   const [rejectionNotes, setRejectionNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const [showKeyboardHints, setShowKeyboardHints] = useState(false);
 
   const currentImage = queue[currentIndex];
 
@@ -77,6 +81,51 @@ export default function ReviewView({ project }: ReviewViewProps) {
       setAnnotations([]);
     }
   }, [currentImage]);
+
+  const updateAnnotationClass = (idx: number, className: string) => {
+    setAnnotations((items) =>
+      items.map((item, itemIdx) => (itemIdx === idx ? { ...item, class_name: className } : item)),
+    );
+  };
+
+  const deleteAnnotation = (idx: number) => {
+    setAnnotations((items) =>
+      items.map((item, itemIdx) => (itemIdx === idx ? { ...item, deleted: true } : item)),
+    );
+  };
+
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Avoid if typing in input
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'SELECT') return;
+
+      const key = parseInt(e.key);
+      if (!isNaN(key) && key >= 1 && key <= 9) {
+        const classIndex = key - 1;
+        if (classIndex < reviewClasses.length && selectedRegion !== null) {
+          updateAnnotationClass(selectedRegion, reviewClasses[classIndex].name);
+        }
+      }
+      
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedRegion !== null) {
+          deleteAnnotation(selectedRegion);
+          setSelectedRegion(null);
+        }
+      }
+
+      if (e.key === 'ArrowLeft') {
+        if (currentIndex > 0) setCurrentIndex(currentIndex - 1);
+      }
+      if (e.key === 'ArrowRight') {
+        if (currentIndex < queue.length - 1) setCurrentIndex(currentIndex + 1);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedRegion, reviewClasses, currentIndex, queue.length]);
 
   const visibleAnnotations = useMemo(
     () => annotations.filter((annotation) => !annotation.deleted),
@@ -116,6 +165,7 @@ export default function ReviewView({ project }: ReviewViewProps) {
       confidence: annotation.confidence,
       segmentation,
       bbox,
+      model_source: annotation.model_source,
     };
   };
 
@@ -192,18 +242,6 @@ export default function ReviewView({ project }: ReviewViewProps) {
     }
   };
 
-  const updateAnnotationClass = (idx: number, className: string) => {
-    setAnnotations((items) =>
-      items.map((item, itemIdx) => (itemIdx === idx ? { ...item, class_name: className } : item)),
-    );
-  };
-
-  const deleteAnnotation = (idx: number) => {
-    setAnnotations((items) =>
-      items.map((item, itemIdx) => (itemIdx === idx ? { ...item, deleted: true } : item)),
-    );
-  };
-
   const resetAnnotations = () => {
     if (currentImage) fetchAnnotations(currentImage.id);
   };
@@ -217,7 +255,7 @@ export default function ReviewView({ project }: ReviewViewProps) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center bg-background h-full text-white">
         <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
-        <p className="mt-4 text-textMuted text-sm">Loading review queue...</p>
+        <p className="mt-4 text-textMuted text-sm font-medium">Loading review queue...</p>
       </div>
     );
   }
@@ -225,8 +263,8 @@ export default function ReviewView({ project }: ReviewViewProps) {
   if (error) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center bg-background h-full text-white p-6">
-        <AlertTriangle className="text-red-400 mb-4" size={40} />
-        <h3 className="text-lg font-bold mb-2">Error Loading Review</h3>
+        <AlertTriangle className="text-red-400 mb-4" size={48} />
+        <h3 className="text-xl font-bold mb-2 text-textMain">Error Loading Review</h3>
         <p className="text-textMuted text-sm mb-6">{error}</p>
         <button onClick={fetchQueue} className="btn-primary">Retry</button>
       </div>
@@ -236,13 +274,13 @@ export default function ReviewView({ project }: ReviewViewProps) {
   if (queue.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center bg-background h-full text-white p-8">
-        <Check className="text-emerald-400 mb-4" size={40} />
-        <h2 className="text-xl font-bold mb-2">Review Queue Clear</h2>
-        <p className="text-textMuted text-sm mb-8 text-center max-w-sm">
+        <Check className="text-emerald-400 mb-6 drop-shadow-[0_0_15px_rgba(52,211,153,0.5)]" size={64} />
+        <h2 className="text-2xl font-bold mb-3 text-textMain">Review Queue Clear</h2>
+        <p className="text-textMuted text-base mb-8 text-center max-w-sm">
           All completed images have been reviewed or are waiting for AI processing.
         </p>
-        <button onClick={fetchQueue} className="btn-primary text-sm flex items-center gap-2">
-          <Play size={14} /> Refresh Queue
+        <button onClick={fetchQueue} className="btn-primary text-sm flex items-center gap-2 px-6 py-3">
+          <Play size={18} /> Refresh Queue
         </button>
       </div>
     );
@@ -255,63 +293,73 @@ export default function ReviewView({ project }: ReviewViewProps) {
   return (
     <div className="flex flex-1 h-full overflow-hidden bg-background">
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        <div className="h-16 border-b border-white/10 bg-[#111b2b] px-6 flex items-center justify-between shrink-0">
+        {/* Top Header */}
+        <div className="h-16 border-b border-white/5 bg-surface/90 backdrop-blur-md px-6 flex items-center justify-between shrink-0 shadow-sm z-20">
           <div className="min-w-0">
-            <div className="flex items-center gap-3">
-              <span className="text-xs font-semibold text-primary bg-primary/10 border border-primary/20 rounded px-2 py-1">{currentIndex + 1} / {queue.length}</span>
-              <span className="text-sm font-medium text-white truncate max-w-md">{currentImage.filename}</span>
+            <div className="flex items-center gap-3 mb-1">
+              <span className="text-xs font-bold text-primary bg-primary/10 border border-primary/20 rounded px-2.5 py-1 shadow-inner">{currentIndex + 1} / {queue.length}</span>
+              <span className="text-sm font-semibold text-textMain truncate max-w-md">{currentImage.filename}</span>
             </div>
-            <p className="text-[10px] text-textMuted mt-0.5">
-              {visibleAnnotations.length} regions, {Math.round((currentImage.confidence || 0) * 100)}% average confidence
+            <p className="text-[11px] text-textMuted">
+              <span className="text-white font-medium">{visibleAnnotations.length}</span> regions • <span className="text-white font-medium">{Math.round((currentImage.confidence || 0) * 100)}%</span> avg confidence
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 bg-black/20 p-1 rounded-lg border border-white/5">
             <button
               disabled={currentIndex === 0}
               onClick={() => setCurrentIndex(currentIndex - 1)}
-              className="p-2 rounded-md hover:bg-white/5 disabled:opacity-30 text-textMuted hover:text-white"
-              title="Previous"
+              className="p-2 rounded-md hover:bg-white/10 disabled:opacity-30 text-textMuted hover:text-white transition-colors"
+              title="Previous (Left Arrow)"
             >
-              <ChevronLeft size={16} />
+              <ChevronLeft size={18} />
             </button>
             <button
               disabled={currentIndex >= queue.length - 1}
               onClick={() => setCurrentIndex(currentIndex + 1)}
-              className="p-2 rounded-md hover:bg-white/5 disabled:opacity-30 text-textMuted hover:text-white"
-              title="Next"
+              className="p-2 rounded-md hover:bg-white/10 disabled:opacity-30 text-textMuted hover:text-white transition-colors"
+              title="Next (Right Arrow)"
             >
-              <ChevronRight size={16} />
+              <ChevronRight size={18} />
             </button>
+            <div className="w-px h-5 bg-white/10 mx-1"></div>
             <button
               onClick={() => setOverlayVisible(!overlayVisible)}
-              className="p-2 rounded-md hover:bg-white/5 text-textMuted hover:text-white"
+              className={`p-2 rounded-md transition-colors ${overlayVisible ? 'bg-primary/20 text-primary' : 'hover:bg-white/10 text-textMuted hover:text-white'}`}
               title="Toggle mask overlay"
             >
-              {overlayVisible ? <Eye size={16} /> : <EyeOff size={16} />}
+              {overlayVisible ? <Eye size={18} /> : <EyeOff size={18} />}
             </button>
             <button
               onClick={resetAnnotations}
-              className="p-2 rounded-md hover:bg-white/5 text-textMuted hover:text-white"
+              className="p-2 rounded-md hover:bg-white/10 text-textMuted hover:text-white transition-colors"
               title="Reset local edits"
             >
-              <RotateCcw size={16} />
+              <RotateCcw size={18} />
+            </button>
+            <button
+              onClick={() => setShowKeyboardHints(!showKeyboardHints)}
+              className={`p-2 rounded-md transition-colors ${showKeyboardHints ? 'bg-secondary/20 text-secondary' : 'hover:bg-white/10 text-textMuted hover:text-white'}`}
+              title="Keyboard Shortcuts"
+            >
+              <Keyboard size={18} />
             </button>
           </div>
         </div>
 
-        <div className="flex-1 relative bg-[#070b12] overflow-auto">
-          <div className="min-h-full flex items-center justify-center p-6">
-            <div className="relative max-w-full max-h-full border border-white/10 bg-black shadow-2xl shadow-black/40 rounded-md overflow-hidden">
+        {/* Canvas Area */}
+        <div className="flex-1 relative bg-[#040405] overflow-auto radial-gradient-background">
+          <div className="min-h-full flex items-center justify-center p-8">
+            <div className="relative max-w-full max-h-full border border-white/10 bg-black shadow-[0_0_50px_rgba(0,0,0,0.8)] rounded-lg overflow-hidden transition-all">
               <img
                 src={imageUrl}
                 alt={currentImage.filename}
-                className="block max-w-full max-h-[calc(100vh-14rem)] object-contain"
+                className="block max-w-full max-h-[calc(100vh-16rem)] object-contain"
               />
               {overlayVisible && maskUrl && (
                 <img
                   src={maskUrl}
                   alt="Mask Overlay"
-                  className="absolute inset-0 w-full h-full object-fill pointer-events-none"
+                  className={`absolute inset-0 w-full h-full object-fill pointer-events-none transition-opacity duration-300 ${selectedRegion !== null ? 'opacity-30' : 'opacity-100'}`}
                 />
               )}
               <svg
@@ -319,104 +367,146 @@ export default function ReviewView({ project }: ReviewViewProps) {
                 viewBox={viewBox}
                 preserveAspectRatio="none"
                 onMouseMove={(e) => setMousePos({ x: e.clientX, y: e.clientY })}
+                onClick={() => setSelectedRegion(null)}
               >
                 {visibleAnnotations.map((annotation, idx) => {
                   const points = annotation.segmentation.map((point) => point.join(',')).join(' ');
                   const color = getClassColor(annotation.class_name);
                   const isSelected = selectedRegion === idx;
                   const isHovered = hoveredRegion === idx;
+                  
+                  // Focus mode: if something is selected, fade out the others heavily
+                  const isFaded = selectedRegion !== null && !isSelected;
+
                   return (
                     <polygon
                       key={`${annotation.id || idx}-${annotation.class_name}`}
                       points={points}
-                      fill={isSelected ? `${color}66` : (isHovered ? `${color}44` : 'transparent')}
-                      stroke={isSelected ? '#ffffff' : (isHovered ? '#ffffff' : 'transparent')}
-                      strokeWidth={isSelected || isHovered ? (currentImage.width ? currentImage.width / 400 : 2) : 0}
-                      className="cursor-pointer transition-all duration-150 outline-none"
+                      fill={isSelected ? `${color}77` : (isHovered ? `${color}55` : (isFaded ? `${color}11` : 'transparent'))}
+                      stroke={isSelected ? '#ffffff' : (isHovered ? '#ffffff' : (isFaded ? 'transparent' : 'transparent'))}
+                      strokeWidth={isSelected ? (currentImage.width ? currentImage.width / 200 : 3) : (isHovered ? (currentImage.width ? currentImage.width / 400 : 2) : 0)}
+                      strokeDasharray={isSelected ? `${currentImage.width ? currentImage.width / 100 : 5}, ${currentImage.width ? currentImage.width / 100 : 5}` : 'none'}
+                      className={`cursor-pointer transition-all duration-200 outline-none ${isSelected ? 'animate-[dash_1s_linear_infinite]' : ''}`}
                       onMouseEnter={() => setHoveredRegion(idx)}
                       onMouseLeave={() => setHoveredRegion(null)}
-                      onClick={() => setSelectedRegion(idx)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedRegion(idx);
+                      }}
                     />
                   );
                 })}
               </svg>
               
-              {/* Floating Tooltip */}
+              {/* Floating Tooltip / Context Menu */}
               {hoveredRegion !== null && visibleAnnotations[hoveredRegion] && (
                 <div
-                  className="fixed z-50 pointer-events-none bg-black/90 text-white text-xs px-3 py-2 rounded shadow-lg border border-white/20 whitespace-nowrap backdrop-blur-sm"
+                  className="fixed z-50 pointer-events-none bg-surface/95 text-textMain text-xs px-4 py-3 rounded-xl shadow-2xl border border-white/10 whitespace-nowrap backdrop-blur-md"
                   style={{ left: mousePos.x + 15, top: mousePos.y + 15 }}
                 >
-                  <div className="flex items-center gap-2 mb-1.5">
+                  <div className="flex items-center gap-2 mb-2">
                     <span 
-                      className="w-2.5 h-2.5 rounded-full shadow-[0_0_4px_rgba(255,255,255,0.5)]" 
+                      className="w-3 h-3 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.4)]" 
                       style={{ backgroundColor: getClassColor(visibleAnnotations[hoveredRegion].class_name) }} 
                     />
                     <span className="font-bold text-sm">{visibleAnnotations[hoveredRegion].class_name}</span>
                   </div>
-                  <div className="text-textMuted text-[10px] flex justify-between gap-4">
+                  <div className="text-textMuted text-[11px] flex justify-between gap-6 mb-1">
                     <span>Confidence:</span>
-                    <span className="font-mono">{visibleAnnotations[hoveredRegion].confidence ? Math.round((visibleAnnotations[hoveredRegion].confidence as number) * 100) + '%' : 'N/A'}</span>
+                    <span className="font-mono text-white">{visibleAnnotations[hoveredRegion].confidence ? Math.round((visibleAnnotations[hoveredRegion].confidence as number) * 100) + '%' : 'N/A'}</span>
                   </div>
-                  <div className="text-textMuted text-[10px] flex justify-between gap-4">
+                  <div className="text-textMuted text-[11px] flex justify-between gap-6 mb-1">
+                    <span>Model:</span>
+                    <span className="font-mono text-white">{visibleAnnotations[hoveredRegion].model_source || 'Unknown'}</span>
+                  </div>
+                  <div className="text-textMuted text-[11px] flex justify-between gap-6">
                     <span>Points:</span>
-                    <span className="font-mono">{visibleAnnotations[hoveredRegion].segmentation.length}</span>
+                    <span className="font-mono text-white">{visibleAnnotations[hoveredRegion].segmentation.length}</span>
                   </div>
-                  <div className="text-emerald-400 text-[9px] mt-1.5 pt-1 border-t border-white/10 text-center">
-                    Click to edit
-                  </div>
+                  
+                  {selectedRegion === hoveredRegion ? (
+                    <div className="text-accent font-semibold text-[10px] mt-2 pt-2 border-t border-white/5 text-center">
+                      Selected - Press 1-9 to reclassify
+                    </div>
+                  ) : (
+                    <div className="text-primary font-medium text-[10px] mt-2 pt-2 border-t border-white/5 text-center">
+                      Click to select & edit
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        <div className="border-t border-white/10 bg-[#111b2b] px-6 py-3 flex items-center gap-3 shrink-0">
+        {/* Bottom Action Bar */}
+        <div className="border-t border-white/5 bg-surface px-6 py-4 flex items-center gap-4 shrink-0 shadow-xl z-20">
           <input
             value={reviewNotes}
             onChange={(event) => setReviewNotes(event.target.value)}
-            placeholder="Reviewer notes"
-            className="flex-1 bg-[#0b1120] border border-white/10 rounded-md px-3 py-2 text-xs text-white outline-none focus:border-primary"
+            placeholder="Add reviewer notes..."
+            className="flex-1 bg-black/30 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-textMain outline-none focus:border-primary transition-colors"
           />
           <button
             onClick={handleReject}
             disabled={saving}
-            className="px-4 py-2 text-xs font-semibold text-red-300 bg-red-500/10 border border-red-500/20 rounded-md flex items-center gap-1.5 disabled:opacity-50 hover:bg-red-500/15"
+            className="px-5 py-2.5 text-sm font-semibold text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-2 disabled:opacity-50 hover:bg-red-500/20 hover:border-red-500/40 transition-all"
           >
-            <X size={14} /> Reject & Relabel
+            <X size={16} /> Reject & Relabel
           </button>
           <button
             onClick={handleSaveCorrections}
             disabled={saving}
-            className="px-4 py-2 text-xs font-semibold text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-md flex items-center gap-1.5 disabled:opacity-50 hover:bg-amber-500/15"
+            className="px-5 py-2.5 text-sm font-semibold text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center gap-2 disabled:opacity-50 hover:bg-amber-500/20 hover:border-amber-500/40 transition-all"
           >
-            <Save size={14} /> Save Corrections
+            <Save size={16} /> Save Corrections
           </button>
           <button
             onClick={handleApprove}
             disabled={saving}
-            className="px-5 py-2.5 rounded-md bg-emerald-500 hover:bg-emerald-600 text-white text-xs flex items-center gap-1.5 disabled:opacity-50"
+            className="px-8 py-2.5 rounded-lg bg-primary hover:bg-indigo-500 text-white text-sm font-bold flex items-center gap-2 disabled:opacity-50 shadow-[0_0_15px_rgba(99,102,241,0.4)] transition-all"
           >
-            <Check size={14} /> Approve
+            <Check size={16} /> Approve
           </button>
         </div>
       </div>
 
-      <div className="w-96 border-l border-white/10 bg-[#111b2b] flex flex-col h-full shrink-0 overflow-hidden">
-        <div className="p-4 border-b border-white/10">
-          <h3 className="font-semibold text-white text-sm">Manual Review</h3>
-          <p className="text-[10px] text-textMuted mt-1">
-            Pixel mask output is reviewed here before export or relabeling.
+      {/* Right Sidebar */}
+      <div className="w-80 border-l border-white/5 bg-surface flex flex-col h-full shrink-0 overflow-hidden z-20">
+        <div className="p-5 border-b border-white/5 bg-black/20">
+          <h3 className="font-bold text-textMain text-sm mb-1 flex items-center gap-2">
+            <Activity size={16} className="text-primary"/> Manual Review
+          </h3>
+          <p className="text-xs text-textMuted">
+            Review and correct AI polygon predictions before saving.
           </p>
         </div>
 
-        <div className="p-3 border-b border-white/10">
-          <h4 className="text-[10px] text-textMuted uppercase tracking-wider mb-2">Reject Feedback</h4>
-          <div className="grid grid-cols-2 gap-2">
+        {showKeyboardHints && (
+          <div className="p-4 border-b border-white/5 bg-primary/5 animate-in slide-in-from-top-2">
+            <h4 className="text-[10px] text-primary uppercase tracking-wider mb-3 font-bold">Keyboard Shortcuts</h4>
+            <div className="grid grid-cols-2 gap-2">
+              {reviewClasses.slice(0, 9).map((classDef, idx) => (
+                <div key={classDef.id} className="flex items-center gap-2 text-xs">
+                  <span className="bg-black/50 border border-white/10 rounded w-5 h-5 flex items-center justify-center font-mono text-[10px] text-textMuted shadow-inner">{idx + 1}</span>
+                  <span className="truncate text-textMain" style={{ color: classDef.color }}>{classDef.name}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 pt-3 border-t border-white/5 flex gap-4 text-xs text-textMuted">
+              <span className="flex items-center gap-1"><span className="bg-black/50 px-1 border border-white/10 rounded font-mono">Del</span> Delete</span>
+              <span className="flex items-center gap-1"><span className="bg-black/50 px-1 border border-white/10 rounded font-mono">←</span><span className="bg-black/50 px-1 border border-white/10 rounded font-mono">→</span> Nav</span>
+            </div>
+          </div>
+        )}
+
+        <div className="p-4 border-b border-white/5">
+          <h4 className="text-[10px] text-textMuted uppercase tracking-wider mb-3 font-semibold">Reject Context</h4>
+          <div className="space-y-3">
             <select
               value={rejectionClass}
               onChange={(event) => setRejectionClass(event.target.value)}
-              className="bg-[#0b1120] border border-white/10 rounded-md px-2 py-2 text-xs text-white outline-none focus:border-primary"
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-textMain outline-none focus:border-red-500/50 transition-colors"
             >
               {reviewClasses.map((classDef) => (
                 <option key={classDef.id} value={classDef.name}>{classDef.name}</option>
@@ -425,53 +515,45 @@ export default function ReviewView({ project }: ReviewViewProps) {
             <input
               value={rejectionNotes}
               onChange={(event) => setRejectionNotes(event.target.value)}
-              placeholder="What was missed?"
-              className="bg-[#0b1120] border border-white/10 rounded-md px-2 py-2 text-xs text-white outline-none focus:border-primary"
+              placeholder="What was missed or wrong?"
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-textMain outline-none focus:border-red-500/50 transition-colors"
             />
           </div>
         </div>
 
-        <div className="p-3 border-b border-white/10">
-          <h4 className="text-[10px] text-textMuted uppercase tracking-wider mb-2">Class Legend</h4>
-          <div className="flex flex-wrap gap-1">
-            {reviewClasses.map((classDef) => (
-              <span
-                key={classDef.id}
-                className="text-[9px] px-1.5 py-0.5 rounded border border-white/10"
-                style={{ borderLeftColor: classDef.color, borderLeftWidth: 3 }}
-              >
-                {classDef.name}
-              </span>
-            ))}
+        <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 custom-scrollbar">
+          <div className="flex items-center justify-between mb-1">
+            <h4 className="text-[10px] text-textMuted uppercase tracking-wider font-semibold">Detected Regions</h4>
+            <span className="text-[10px] font-mono bg-white/10 px-2 py-0.5 rounded-full text-textMain">{visibleAnnotations.length}</span>
           </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+          
           {visibleAnnotations.length === 0 ? (
-            <div className="text-xs text-textMuted text-center py-8">
-              <AlertTriangle size={22} className="mx-auto mb-2 text-amber-400" />
+            <div className="text-xs text-textMuted text-center py-10 bg-black/20 rounded-xl border border-white/5 border-dashed">
+              <AlertTriangle size={24} className="mx-auto mb-3 text-amber-500/50" />
               No regions detected
             </div>
           ) : (
             visibleAnnotations.map((annotation, idx) => {
               const color = getClassColor(annotation.class_name);
+              const isSelected = selectedRegion === idx;
+              
               return (
                 <div
                   key={annotation.id || idx}
                   onClick={() => setSelectedRegion(idx)}
                   onMouseEnter={() => setHoveredRegion(idx)}
                   onMouseLeave={() => setHoveredRegion(null)}
-                  className={`p-3 rounded-md border cursor-pointer transition-colors ${
-                    selectedRegion === idx ? 'border-primary bg-primary/10' : (hoveredRegion === idx ? 'border-white/20 bg-white/[0.08]' : 'border-white/5 bg-white/[0.03] hover:bg-white/[0.06]')
+                  className={`p-3 rounded-xl border cursor-pointer transition-all duration-200 group ${
+                    isSelected ? 'border-primary bg-primary/10 shadow-[0_0_15px_rgba(99,102,241,0.15)] scale-[1.02]' : (hoveredRegion === idx ? 'border-white/20 bg-white/[0.04]' : 'border-white/5 bg-black/20 hover:bg-white/[0.02]')
                   }`}
                 >
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
+                  <div className="flex items-center gap-3 mb-2.5">
+                    <span className={`w-3 h-3 rounded-full shrink-0 shadow-[0_0_5px_rgba(255,255,255,0.3)] ${isSelected ? 'animate-pulse' : ''}`} style={{ backgroundColor: color }} />
                     <select
                       value={annotation.class_name}
                       onChange={(event) => updateAnnotationClass(idx, event.target.value)}
                       onClick={(event) => event.stopPropagation()}
-                      className="flex-1 bg-[#0b1120] border border-white/10 rounded-md px-2 py-1.5 text-xs text-white outline-none focus:border-primary"
+                      className="flex-1 bg-black/50 border border-white/5 rounded-md px-2 py-1.5 text-xs text-textMain font-medium outline-none focus:border-primary transition-colors"
                     >
                       {reviewClasses.map((classDef) => (
                         <option key={classDef.id} value={classDef.name}>{classDef.name}</option>
@@ -482,22 +564,20 @@ export default function ReviewView({ project }: ReviewViewProps) {
                         event.stopPropagation();
                         deleteAnnotation(idx);
                       }}
-                      className="p-1.5 rounded-md text-red-300 hover:bg-red-500/10"
+                      className={`p-1.5 rounded-md transition-colors ${isSelected ? 'text-red-400 hover:bg-red-500/20' : 'text-textMuted hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100'}`}
                       title="Remove region"
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={16} />
                     </button>
                   </div>
-                  <div className="flex items-center justify-between text-[10px] text-textMuted">
-                    <span>{annotation.segmentation.length} mask points</span>
-                    <span>{annotation.confidence ? `${Math.round(annotation.confidence * 100)}%` : 'No score'}</span>
+                  <div className="flex items-center justify-between text-[11px] text-textMuted px-1 mt-1 border-t border-white/5 pt-1.5">
+                    <span className="flex items-center gap-1"><Activity size={12}/> Model:</span>
+                    <span className="font-mono text-xs">{annotation.model_source || 'Unknown'}</span>
                   </div>
-                  {annotation.bbox?.needs_attention && (
-                    <p className="text-[10px] text-amber-300 mt-2">Low-confidence region needs careful review</p>
-                  )}
-                  {annotation.bbox?.alt_class && annotation.bbox.alt_class !== annotation.class_name && (
-                    <p className="text-[10px] text-textMuted mt-1">Alternative: {annotation.bbox.alt_class}</p>
-                  )}
+                  <div className="flex items-center justify-between text-[11px] text-textMuted px-1 mt-1">
+                    <span className="flex items-center gap-1"><Activity size={12}/> {annotation.segmentation.length} pts</span>
+                    <span className="font-mono bg-black/40 px-1.5 rounded">{annotation.confidence ? `${Math.round(annotation.confidence * 100)}%` : 'N/A'}</span>
+                  </div>
                 </div>
               );
             })
@@ -505,8 +585,9 @@ export default function ReviewView({ project }: ReviewViewProps) {
         </div>
 
         {currentImage?.reviewer_notes && (
-          <div className="p-3 border-t border-white/10 bg-slate-950/40 max-h-40 overflow-y-auto">
-            <pre className="text-[9px] text-textMuted whitespace-pre-wrap">{currentImage.reviewer_notes}</pre>
+          <div className="p-4 border-t border-white/5 bg-amber-500/5">
+            <h4 className="text-[10px] text-amber-500/80 uppercase tracking-wider mb-2 font-semibold">Previous Notes</h4>
+            <pre className="text-[11px] text-amber-200/70 whitespace-pre-wrap font-sans">{currentImage.reviewer_notes}</pre>
           </div>
         )}
       </div>

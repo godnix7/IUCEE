@@ -10,14 +10,21 @@ from app.services.processing_service import ProcessingService
 
 router = APIRouter()
 
+from pydantic import BaseModel
+from typing import Optional
+
+class AutoLabelRequest(BaseModel):
+    model_name: Optional[str] = "nvidia/segformer-b3-finetuned-ade-512-512"
+
 @router.post("/{project_id}/auto-label")
-def start_auto_labeling(project_id: int, db: Session = Depends(get_db)):
+def start_auto_labeling(project_id: int, request: Optional[AutoLabelRequest] = None, db: Session = Depends(get_db)):
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    count = ProcessingService.enqueue_all(db, project_id)
-    return {"message": f"Enqueued {count} images for background processing", "state": "RUNNING"}
+    model_name = request.model_name if request else "nvidia/segformer-b3-finetuned-ade-512-512"
+    count = ProcessingService.enqueue_all(db, project_id, model_name)
+    return {"message": f"Enqueued {count} images for background processing with {model_name}", "state": "RUNNING"}
 
 @router.post("/{project_id}/pause")
 def pause_auto_labeling(project_id: int):

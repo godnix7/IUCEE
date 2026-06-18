@@ -49,8 +49,21 @@ def startup_event():
     HardwareService.print_startup_check()
     ModelService.load_real_models()
     
-    # Worker is purposefully NOT started on boot. 
-    # It will only start when the user clicks 'Start' in the Dashboard.
+    from app.core.database import SessionLocal
+    from app.models import ProcessingQueue
+    
+    # Auto-resume processing worker if there are pending items
+    db = SessionLocal()
+    pending_count = db.query(ProcessingQueue).filter(ProcessingQueue.status == "pending").count()
+    db.close()
+    
+    if pending_count > 0:
+        print(f"Found {pending_count} pending items in queue. Auto-resuming worker...")
+        ProcessingService().start_worker()
+    else:
+        # Worker is purposefully NOT started on boot if queue is empty. 
+        # It will only start when the user clicks 'Start' in the Dashboard.
+        pass
 
 @app.get("/")
 def root():

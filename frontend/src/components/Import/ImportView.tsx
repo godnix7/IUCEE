@@ -22,7 +22,8 @@ export default function ImportView({ onProjectCreated }: { onProjectCreated: (p:
       const project = await api.projects.create({
         name,
         description: 'Auto-imported dataset',
-        root_path: path
+        root_path: path,
+        classes: []
       });
       onProjectCreated(project);
     } catch (err: any) {
