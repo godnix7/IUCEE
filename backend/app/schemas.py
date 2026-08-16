@@ -1,107 +1,124 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-class ProjectClassBase(BaseModel):
-    name: str
-    color: str
-    shortcut_key: Optional[str] = None
+# --- Auth & User Schemas ---
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
 
-class ProjectClassCreate(ProjectClassBase):
-    pass
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str
+    role: Optional[str] = "planner"
 
-class ProjectClass(ProjectClassBase):
+class UserResponse(BaseModel):
     id: int
-    project_id: int
+    email: str
+    full_name: Optional[str]
+    role: str
+    is_active: bool
+    created_at: datetime
 
     class Config:
         from_attributes = True
 
-class ProjectBase(BaseModel):
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+class TokenRefreshRequest(BaseModel):
+    refresh_token: str
+
+# --- Project Schemas ---
+class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    root_path: str
 
-class ProjectCreate(ProjectBase):
-    classes: List[ProjectClassCreate] = []
-
-class Project(ProjectBase):
+class ProjectResponse(BaseModel):
     id: int
+    name: str
+    description: Optional[str]
+    created_by_id: Optional[int]
     created_at: datetime
-    classes: List[ProjectClass] = []
+    analysis_count: Optional[int] = 0
 
     class Config:
         from_attributes = True
 
-class ImageBase(BaseModel):
-    filename: str
-    relative_path: str
-    width: int
-    height: int
-    file_size_bytes: int
+# --- Spatial Feature Schemas ---
+class SpatialFeatureResponse(BaseModel):
+    id: int
+    analysis_id: int
+    class_name: str
+    source: str
+    confidence: float
+    area_sq_meters: float
+    feature_count: int
+    geometry_json: Dict[str, Any]
+    properties: Optional[Dict[str, Any]] = None
 
-class Image(ImageBase):
+    class Config:
+        from_attributes = True
+
+# --- Urban Benchmark Schemas ---
+class UrbanBenchmarkResponse(BaseModel):
+    id: int
+    analysis_id: int
+    population_count: int
+    road_density_km_per_sqkm: float
+    building_coverage_pct: float
+    tree_cover_pct: float
+    water_cover_pct: float
+    built_up_ratio: float
+    hospitals_per_10k_pop: float
+    schools_per_10k_pop: float
+    infrastructure_score: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# --- Imagery Analysis Schemas ---
+class AnalysisCreate(BaseModel):
+    project_id: int
+    population_estimate: Optional[int] = 1000
+
+class AnalysisResponse(BaseModel):
     id: int
     project_id: int
+    filename: str
+    file_path: str
+    file_type: str
+    crs: str
+    bounds: Optional[List[float]] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    population_estimate: int
     status: str
-    review_status: str
-    confidence: Optional[float] = None
-    agreement_score: Optional[float] = None
-    mask_path: Optional[str] = None
-    thumbnail_path: Optional[str] = None
-    rejection_reason: Optional[str] = None
-    reviewer_notes: Optional[str] = None
-    retry_count: int
+    inference_time_sec: Optional[float] = None
+    confidence_score: Optional[float] = None
+    error_message: Optional[str] = None
     created_at: datetime
-    updated_at: datetime
+    benchmark: Optional[UrbanBenchmarkResponse] = None
 
     class Config:
         from_attributes = True
 
-class AnnotationBase(BaseModel):
-    class_name: str
-    model_source: str
-    confidence: Optional[float] = None
-    segmentation_json: Optional[str] = None
-    bbox_json: Optional[str] = None
-
-class AnnotationCreate(AnnotationBase):
-    pass
-
-class Annotation(AnnotationBase):
-    id: int
-    image_id: int
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-class DashboardStats(BaseModel):
-    total_images: int
-    processed_images: int
-    remaining_images: int
-    queue_size: int
-    
-    review_tasks_sent: int
-    review_tasks_reviewed: int
-    review_tasks_corrected: int
-    review_tasks_pending: int
-    review_tasks_rejected: int
-    
-    avg_confidence: float
-    class_distribution: Dict[str, int]
-    
-    engine_state: str
-    hardware: Dict[str, Any]
-
-class QueueStatus(BaseModel):
-    pending: int
-    processing: int
-    completed: int
-    failed: int
-    processing_speed_ips: float # images per second
-    eta_seconds: int
-
-class RejectRequest(BaseModel):
-    reason: str
-    notes: Optional[str] = None
+# --- Dashboard & Analytics Schemas ---
+class DashboardStatsResponse(BaseModel):
+    total_analyses: int
+    infrastructure_coverage_pct: float
+    roads_detected_km: float
+    buildings_detected_count: int
+    water_bodies_count: int
+    tree_coverage_pct: float
+    population_mapped: int
+    infrastructure_score: float
+    benchmark_status: str
+    recent_analyses: List[AnalysisResponse]
+    processing_queue_count: int
+    active_users_count: int

@@ -1,27 +1,30 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-import os
 
 from app.core.config import settings
-from app.core.database import engine, Base, check_and_migrate_db
-from app.api import projects, labeling, review, dashboard, exports
-from app.services.processing_service import ProcessingService
+from app.core.database import init_db
+from app.api.v1 import auth, projects, inference, gis, analytics, reports, users
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
-check_and_migrate_db(engine, Base)
-
+# Initialize database schema and default admin/planner users
+init_db()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
-# Set up CORS
+# CORS middleware for local and production frontends
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173", "http://localhost:8080", "http://127.0.0.1:8080"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,42 +32,25 @@ app.add_middleware(
 
 # Ensure data directories exist
 os.makedirs(settings.DATA_DIR, exist_ok=True)
-os.makedirs(os.path.join(settings.DATA_DIR, "exports"), exist_ok=True)
-
-# Static file serving (for thumbnails and images)
-# In production, use nginx for this.
 app.mount("/static", StaticFiles(directory=settings.DATA_DIR), name="static")
 
-# Include routers
+# Register API V1 Routers
+app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["auth"])
 app.include_router(projects.router, prefix=f"{settings.API_V1_STR}/projects", tags=["projects"])
-app.include_router(labeling.router, prefix=f"{settings.API_V1_STR}/labeling", tags=["labeling"])
-app.include_router(review.router, prefix=f"{settings.API_V1_STR}/review", tags=["review"])
-app.include_router(dashboard.router, prefix=f"{settings.API_V1_STR}/dashboard", tags=["dashboard"])
-app.include_router(exports.router, prefix=f"{settings.API_V1_STR}/exports", tags=["exports"])
-
-@app.on_event("startup")
-def startup_event():
-    from app.services.hardware_service import HardwareService
-    from app.services.model_service import ModelService
-    HardwareService.print_startup_check()
-    ModelService.load_real_models()
-    
-    from app.core.database import SessionLocal
-    from app.models import ProcessingQueue
-    
-    # Auto-resume processing worker if there are pending items
-    db = SessionLocal()
-    pending_count = db.query(ProcessingQueue).filter(ProcessingQueue.status == "pending").count()
-    db.close()
-    
-    if pending_count > 0:
-        print(f"Found {pending_count} pending items in queue. Auto-resuming worker...")
-        ProcessingService().start_worker()
-    else:
-        # Worker is purposefully NOT started on boot if queue is empty. 
-        # It will only start when the user clicks 'Start' in the Dashboard.
-        pass
+app.include_router(inference.router, prefix=f"{settings.API_V1_STR}/inference", tags=["inference"])
+app.include_router(gis.router, prefix=f"{settings.API_V1_STR}/gis", tags=["gis"])
+app.include_router(analytics.router, prefix=f"{settings.API_V1_STR}/analytics", tags=["analytics"])
+app.include_router(reports.router, prefix=f"{settings.API_V1_STR}/reports", tags=["reports"])
+app.include_router(users.router, prefix=f"{settings.API_V1_STR}/users", tags=["users"])
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to AI-Powered Aerial Infrastructure Dataset Platform API"}
+    return {
+        "system": "UrbanSense AI Powered Urban Infrastructure Intelligence System API",
+        "version": "1.0.0",
+        "docs": "/docs"
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
