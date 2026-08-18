@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Eye, EyeOff, Lock, Mail, Shield, Sparkles } from 'lucide-react';
+import { Eye, EyeOff, Lock, Mail, Sparkles } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 export const LoginPage: React.FC<{ onNavigateRegister: () => void; onNavigateForgot: () => void }> = ({
@@ -7,8 +7,8 @@ export const LoginPage: React.FC<{ onNavigateRegister: () => void; onNavigateFor
   onNavigateForgot
 }) => {
   const { login } = useAuth();
-  const [email, setEmail] = useState('planner@urbansense.ai');
-  const [password, setPassword] = useState('planner123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -27,10 +27,6 @@ export const LoginPage: React.FC<{ onNavigateRegister: () => void; onNavigateFor
     }
   };
 
-  const setDemoRole = (roleEmail: string, rolePass: string) => {
-    setEmail(roleEmail);
-    setPassword(rolePass);
-  };
 
   return (
     <div className="min-h-screen w-full bg-[#0b0f19] text-white flex items-center justify-center p-4 relative overflow-hidden">
@@ -65,8 +61,9 @@ export const LoginPage: React.FC<{ onNavigateRegister: () => void; onNavigateFor
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
                 className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-lg py-2.5 pl-10 pr-4 text-sm text-white focus:outline-none transition-colors"
-                placeholder="name@organization.gov"
+                placeholder="you@example.com"
               />
             </div>
           </div>
@@ -80,8 +77,9 @@ export const LoginPage: React.FC<{ onNavigateRegister: () => void; onNavigateFor
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
                 className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-lg py-2.5 pl-10 pr-10 text-sm text-white focus:outline-none transition-colors"
-                placeholder="••••••••"
+                placeholder="Enter your password"
               />
               <button
                 type="button"
@@ -121,35 +119,6 @@ export const LoginPage: React.FC<{ onNavigateRegister: () => void; onNavigateFor
           </button>
         </form>
 
-        {/* Quick Role Selector */}
-        <div className="mt-6 pt-6 border-t border-slate-800">
-          <p className="text-xs text-slate-400 text-center mb-3 flex items-center justify-center gap-1">
-            <Shield size={14} className="text-slate-500" /> Select Authentication Role:
-          </p>
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => setDemoRole('admin@urbansense.ai', 'admin123')}
-              className="py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded text-slate-300 border border-slate-700 transition-colors"
-            >
-              Admin
-            </button>
-            <button
-              type="button"
-              onClick={() => setDemoRole('planner@urbansense.ai', 'planner123')}
-              className="py-1.5 text-xs bg-blue-900/40 hover:bg-blue-900/60 rounded text-blue-300 border border-blue-700/50 transition-colors"
-            >
-              Planner
-            </button>
-            <button
-              type="button"
-              onClick={() => setDemoRole('viewer@urbansense.ai', 'viewer123')}
-              className="py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded text-slate-300 border border-slate-700 transition-colors"
-            >
-              Viewer
-            </button>
-          </div>
-        </div>
 
         <div className="mt-6 text-center text-xs text-slate-400">
           Don't have an account?{' '}
