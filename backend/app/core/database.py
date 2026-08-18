@@ -1,4 +1,5 @@
 import os
+from sqlalchemy import text
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.core.config import settings
@@ -12,52 +13,27 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 def init_db():
-    """Create all tables and seed default admin/planner users if DB is empty."""
-    from app.models import User, Project
+    """Create all tables. Seed default users ONLY in development mode."""
+    from app.models import User, Project, RefreshToken
     from app.core.security import hash_password
 
     Base.metadata.create_all(bind=engine)
+
+    if settings.ENVIRONMENT != "development":
+        _validate_postgis_available()
+        return
     
     db = SessionLocal()
     try:
-        # Check if admin user exists
-        admin_user = db.query(User).filter(User.email == "admin@urbansense.ai").first()
-        if not admin_user:
-            admin_user = User(
-                email="admin@urbansense.ai",
-                hashed_password=hash_password("admin123"),
-                full_name="System Administrator",
-                role="admin",
-                is_active=True
-            )
-            db.add(admin_user)
-
-        planner_user = db.query(User).filter(User.email == "planner@urbansense.ai").first()
-        if not planner_user:
-            planner_user = User(
-                email="planner@urbansense.ai",
-                hashed_password=hash_password("planner123"),
-                full_name="Urban Planner",
-                role="planner",
-                is_active=True
-            )
-            db.add(planner_user)
-
-        viewer_user = db.query(User).filter(User.email == "viewer@urbansense.ai").first()
-        if not viewer_user:
-            viewer_user = User(
-                email="viewer@urbansense.ai",
-                hashed_password=hash_password("viewer123"),
-                full_name="Public Viewer",
-                role="viewer",
-                is_active=True
-            )
-            db.add(viewer_user)
-
+        _seed_user(db, settings.SEED_ADMIN_EMAIL, settings.SEED_ADMIN_PASSWORD, "System Administrator", "admin")
+        _seed_user(db, settings.SEED_PLANNER_EMAIL, settings.SEED_PLANNER_PASSWORD, "Urban Planner", "planner")
+        _seed_user(db, settings.SEED_VIEWER_EMAIL, settings.SEED_VIEWER_PASSWORD, "Public Viewer", "viewer")
         db.commit()
 
         # Seed initial default project if none exists
-        if db.query(Project).count() == 0:
+        from app.models import Project
+        admin_user = db.query(User).filter(User.email == settings.SEED_ADMIN_EMAIL).first()
+        if admin_user and db.query(Project).count() == 0:
             default_proj = Project(
                 name="Metropolitan Infrastructure Survey 2026",
                 description="Default GIS imagery analysis project for urban density and infrastructure benchmarking.",
@@ -65,5 +41,68 @@ def init_db():
             )
             db.add(default_proj)
             db.commit()
+            print("[DEV SEED] Created default project")
+
+        _seed_benchmarks(db)
+        db.commit()
     finally:
         db.close()
+
+
+def _validate_postgis_available() -> None:
+    """Fail fast if the configured database is not a working PostGIS instance."""
+    if settings.DATABASE_URL.startswith("sqlite"):
+        raise ValueError("UrbanSense production requires PostgreSQL + PostGIS, not SQLite.")
+
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT PostGIS_Full_Version()"))
+    except Exception as exc:
+        raise ValueError(
+            "UrbanSense production requires a working PostGIS database with the PostGIS extension installed."
+        ) from exc
+    finally:
+        db.close()
+
+
+def _seed_user(db, email: str, password: str, full_name: str, role: str):
+    """Create a seed user if the email/password env vars are provided and user doesn't exist."""
+    from app.models import User
+    from app.core.security import hash_password
+
+    if not email or not password:
+        print(f"[DEV SEED] Skipping {role} user — SEED_{role.upper()}_EMAIL or SEED_{role.upper()}_PASSWORD not set")
+        return
+
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        return
+
+    user = User(
+        email=email,
+        hashed_password=hash_password(password),
+        full_name=full_name,
+        role=role,
+        is_active=True
+    )
+    db.add(user)
+    print(f"[DEV SEED] Created {role} user: {email}")
+
+def _seed_benchmarks(db):
+    """Seed default benchmark definitions for development mode if none exist."""
+    from app.models import BenchmarkDefinition
+    if db.query(BenchmarkDefinition).count() > 0:
+        return
+
+    defaults = [
+        {"indicator": "tree_cover_pct", "unit": "%", "target_value": 15.0, "source": "UrbanSense Development Configuration", "reference_name": "Development Configuration", "notes": "Minimum tree cover recommended for urban centers."},
+        {"indicator": "road_coverage_pct", "unit": "%", "target_value": 5.0, "source": "UrbanSense Development Configuration", "reference_name": "Development Configuration", "notes": "Minimum optimal road coverage network."},
+        {"indicator": "hospitals_per_1000", "unit": "per 1,000", "target_value": 0.5, "source": "UrbanSense Development Configuration", "reference_name": "Development Configuration", "notes": "Hospitals per 1,000 residents."},
+        {"indicator": "schools_per_1000", "unit": "per 1,000", "target_value": 1.0, "source": "UrbanSense Development Configuration", "reference_name": "Development Configuration", "notes": "Schools per 1,000 residents."}
+    ]
+
+    for b in defaults:
+        db.add(BenchmarkDefinition(**b))
+    
+    print("[DEV SEED] Created default benchmarks")
+

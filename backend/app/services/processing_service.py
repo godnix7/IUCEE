@@ -257,7 +257,7 @@ class ProcessingService:
             orig_img = cv2.imread(image.absolute_path)
             orig_h, orig_w = orig_img.shape[:2] if orig_img is not None else (1024, 1024)
 
-            model_name = getattr(queue_item, "model_name", "nvidia/segformer-b3-finetuned-ade-512-512")
+            model_name = getattr(queue_item, "model_name", "wu-pr-gw/segformer-b2-finetuned-with-LoveDA")
             print(f"[ProcessingService] Image {image.id} processing using model: {model_name}")
             
             if model_name == "nvidia/LocateAnything-3B":
@@ -600,8 +600,7 @@ class ProcessingService:
                 queue_item.status = "pending"
             db.commit()
 
-    @staticmethod
-    def enqueue_all(db: Session, project_id: int, model_name: str = "nvidia/segformer-b3-finetuned-ade-512-512") -> int:
+    def enqueue_all(db: Session, project_id: int, model_name: str = "wu-pr-gw/segformer-b2-finetuned-with-LoveDA") -> int:
         images = (
             db.query(Image)
             .filter(

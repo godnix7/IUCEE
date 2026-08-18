@@ -3,6 +3,7 @@ import {
   BarChart3, Compass, Upload, FileText, Settings, Users, LogOut, Sparkles, Building
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ToastProvider } from './context/ToastContext';
 import { LoginPage } from './components/auth/LoginPage';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { GisExplorerView } from './components/map/GisExplorerView';
@@ -105,8 +106,10 @@ function NavBtn({ icon, label, active, onClick }: { icon: React.ReactNode; label
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </ToastProvider>
   );
 }

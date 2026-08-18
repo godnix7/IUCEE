@@ -1,8 +1,11 @@
 import os
 from typing import List, Optional
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(case_sensitive=True, env_file=".env", extra="ignore")
+
     PROJECT_NAME: str = "UrbanSense - AI Powered Urban Infrastructure Intelligence System"
     API_V1_STR: str = "/api/v1"
     
@@ -56,7 +59,7 @@ class Settings(BaseSettings):
 
     # MinIO / S3 Storage Configuration
     MINIO_ENDPOINT: str = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-    MINIO_ACCESS_KEY: str = os.getenv("MINIO_ROOT_USER", "admin")
+    MINIO_ACCESS_KEY: str = os.getenv("MINIO_ROOT_USER", "")
     MINIO_SECRET_KEY: str = os.getenv("MINIO_ROOT_PASSWORD", "")
     MINIO_SECURE: bool = os.getenv("MINIO_SECURE", "false").lower() == "true"
     MINIO_BUCKET: str = os.getenv("MINIO_BUCKET", "urbansense-uploads")
@@ -78,10 +81,6 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
-    class Config:
-        case_sensitive = True
-        env_file = ".env"
-
 
 def validate_production_config(s: Settings) -> None:
     """Raise ValueError if mandatory production secrets are missing."""
@@ -89,8 +88,18 @@ def validate_production_config(s: Settings) -> None:
         errors = []
         if not s.SECRET_KEY:
             errors.append("SECRET_KEY is required in production. Set it via environment variable.")
-        if s.DATABASE_URL.startswith("sqlite"):
+        try:
+            parsed_url = make_url(s.DATABASE_URL)
+        except Exception:
+            parsed_url = None
+        if not parsed_url or parsed_url.drivername.startswith("sqlite"):
             errors.append("SQLite is not supported in production. Set DATABASE_URL to a PostgreSQL/PostGIS connection string.")
+        elif not parsed_url.username or not parsed_url.password:
+            errors.append("DATABASE_URL must include both a database username and password in production.")
+        if not s.MINIO_ACCESS_KEY:
+            errors.append("MINIO_ROOT_USER is required in production. Set it via environment variable.")
+        if not s.MINIO_SECRET_KEY:
+            errors.append("MINIO_ROOT_PASSWORD is required in production. Set it via environment variable.")
         if errors:
             raise ValueError(
                 f"UrbanSense production configuration errors:\n" + "\n".join(f"  - {e}" for e in errors)

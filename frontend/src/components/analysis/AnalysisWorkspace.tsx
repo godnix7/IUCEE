@@ -6,7 +6,9 @@ import type { Project, ImageryAnalysis } from '../../types';
 export const AnalysisWorkspace: React.FC<{ onNavigateMap: () => void }> = ({ onNavigateMap }) => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
-  const [population, setPopulation] = useState(1000);
+  const [populationCount, setPopulationCount] = useState<number | ''>('');
+  const [populationSource, setPopulationSource] = useState('user_supplied');
+  const [populationDate, setPopulationDate] = useState(new Date().toISOString().split('T')[0]);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [currentAnalysis, setCurrentAnalysis] = useState<ImageryAnalysis | null>(null);
@@ -29,7 +31,13 @@ export const AnalysisWorkspace: React.FC<{ onNavigateMap: () => void }> = ({ onN
     setError('');
     setUploading(true);
     try {
-      const analysis = await api.inference.upload(selectedProjectId, file, population);
+      const analysis = await api.inference.upload(
+        selectedProjectId, 
+        file, 
+        populationCount === '' ? undefined : populationCount, 
+        populationSource, 
+        populationDate
+      );
       setCurrentAnalysis(analysis);
 
       const updated = await api.inference.run(analysis.id);
@@ -72,14 +80,35 @@ export const AnalysisWorkspace: React.FC<{ onNavigateMap: () => void }> = ({ onN
               ))}
             </select>
           </div>
+        </div>
 
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">Estimated Citizen Population</label>
+            <label className="block text-xs font-medium text-slate-300 mb-1.5">Population (Optional)</label>
             <input
               type="number"
-              value={population}
-              onChange={(e) => setPopulation(Number(e.target.value))}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-white focus:outline-none"
+              value={populationCount}
+              onChange={(e) => setPopulationCount(e.target.value === '' ? '' : Number(e.target.value))}
+              placeholder="Leave blank if unknown"
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1.5">Population Source</label>
+            <input
+              type="text"
+              value={populationSource}
+              onChange={(e) => setPopulationSource(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1.5">Population Date</label>
+            <input
+              type="date"
+              value={populationDate}
+              onChange={(e) => setPopulationDate(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-blue-500"
             />
           </div>
         </div>

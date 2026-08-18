@@ -42,7 +42,7 @@ export const SettingsView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
             <div>
               <label className="block text-slate-400 mb-1">Model Architecture</label>
-              <input type="text" value="nvidia/segformer-b3-finetuned-ade-512-512" disabled className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-slate-300 font-mono" />
+              <input type="text" value="wu-pr-gw/segformer-b2-finetuned-with-LoveDA" disabled className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-slate-300 font-mono" />
             </div>
             <div>
               <label className="block text-slate-400 mb-1">Confidence Score Threshold</label>

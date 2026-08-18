@@ -1,25 +1,37 @@
 import os
-import shutil
-from typing import Optional
+import tempfile
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.orm import Session
-from app.api.deps import get_db, get_current_user, require_roles
+from app.api.deps import get_db, get_current_user, require_roles, require_spatial_db
 from app.core.config import settings
-from app.models import ImageryAnalysis, Project, SpatialFeature, UrbanBenchmark, User
+from app.models import ImageryAnalysis, Project, SpatialFeature, User, ProcessingJob
 from app.schemas import AnalysisResponse
-from app.services.ai_service import AIService
-from app.services.osm_service import OSMService
-from app.services.benchmark_service import BenchmarkService
+from app.services.storage_service import StorageService
+from app.workers.tasks import process_imagery_analysis
+from app.services.geo_service import GeoService, GeoServiceException
 
 router = APIRouter()
 
-@router.post("/upload", response_model=AnalysisResponse)
+_ALLOWED_MIME_TYPES = {
+    ".tif": {"image/tiff", "image/x-tiff", "application/octet-stream"},
+    ".tiff": {"image/tiff", "image/x-tiff", "application/octet-stream"},
+    ".geotiff": {"image/tiff", "image/x-tiff", "application/octet-stream"},
+    ".png": {"image/png"},
+    ".jpg": {"image/jpeg", "image/jpg"},
+    ".jpeg": {"image/jpeg", "image/jpg"},
+}
+
+@router.post("/upload")
 def upload_imagery(
     project_id: int = Form(...),
-    population_estimate: Optional[int] = Form(1000),
+    population_count: Optional[int] = Form(None),
+    population_source: Optional[str] = Form(None),
+    population_date: Optional[str] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(["admin", "planner"]))
+    current_user: User = Depends(require_roles(["admin", "planner"])),
+    _spatial: None = Depends(require_spatial_db)
 ):
     """Upload GeoTIFF / Drone Orthomosaic / Satellite image file for analysis."""
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -33,119 +45,136 @@ def upload_imagery(
             detail=f"Unsupported file format '{ext}'. Supported: {settings.SUPPORTED_EXTENSIONS}"
         )
 
-    upload_dir = os.path.join(settings.DATA_DIR, f"project_{project_id}")
-    os.makedirs(upload_dir, exist_ok=True)
-    file_path = os.path.join(upload_dir, file.filename)
-
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    declared_mime_type = (file.content_type or "").lower()
+    allowed_mime_types = _ALLOWED_MIME_TYPES.get(ext, set())
+    if declared_mime_type and declared_mime_type not in allowed_mime_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{declared_mime_type}' for '{ext}'. Allowed MIME types: {sorted(allowed_mime_types)}"
+        )
 
     file_type = "geotiff" if ext in [".tif", ".tiff", ".geotiff"] else "satellite_png"
-
+    
+    # 1. Create a transaction for Analysis + Job
     analysis = ImageryAnalysis(
         project_id=project_id,
         filename=file.filename,
-        file_path=file_path,
+        file_path="pending", # placeholder
         file_type=file_type,
-        crs="EPSG:4326",
-        bounds=[77.58, 12.96, 77.60, 12.98], # Default bounding area, updated upon inference
-        width=1024,
-        height=1024,
-        population_estimate=population_estimate or 1000,
+        population_count=population_count,
+        population_source=population_source,
+        population_date=population_date,
         status="pending"
     )
     db.add(analysis)
+    db.flush() # get analysis.id
+
+    # 2. Save file temporarily for CRS check
+    fd, temp_file_path = tempfile.mkstemp(suffix=ext)
+    os.close(fd)
+    
+    try:
+        total_bytes = 0
+        max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        with open(temp_file_path, "wb") as buffer:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > max_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"File too large. Maximum upload size is {settings.MAX_UPLOAD_SIZE_MB} MB."
+                    )
+                buffer.write(chunk)
+
+        if total_bytes == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            
+        original_crs = None
+        bounds = None
+        width = None
+        height = None
+        resolution_x = None
+        resolution_y = None
+        footprint_wkt = None
+        
+        if file_type == "geotiff":
+            meta = GeoService.read_raster_metadata(temp_file_path)
+            original_crs = GeoService.validate_crs(meta["crs"])
+            footprint_geom = GeoService.raster_bounds(temp_file_path)
+            
+            width = meta["width"]
+            height = meta["height"]
+            resolution_x = abs(meta["resolution"][0])
+            resolution_y = abs(meta["resolution"][1])
+            bounds = [
+                footprint_geom.bounds[0],
+                footprint_geom.bounds[1],
+                footprint_geom.bounds[2],
+                footprint_geom.bounds[3]
+            ]
+            footprint_wkt = footprint_geom.wkt
+            
+        analysis.original_crs = original_crs
+        analysis.normalized_crs = "EPSG:4326" if original_crs else None
+        analysis.bounds = bounds
+        analysis.width = width
+        analysis.height = height
+        analysis.resolution_x = resolution_x
+        analysis.resolution_y = resolution_y
+        analysis.footprint = f"SRID=4326;{footprint_wkt}" if footprint_wkt else None
+
+        # 3. Upload to authoritative MinIO
+        safe_filename = file.filename.replace(" ", "_")
+        object_key = f"analyses/{analysis.id}/source/{safe_filename}"
+        StorageService.upload_file(temp_file_path, object_key)
+        analysis.file_path = object_key
+        
+    except GeoServiceException as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+    finally:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+            
+    # 4. Create ProcessingJob
+    job = ProcessingJob(
+        analysis_id=analysis.id,
+        job_type="analysis",
+        status="queued",
+        current_stage="VALIDATING"
+    )
+    db.add(job)
     db.commit()
     db.refresh(analysis)
-    return analysis
+    db.refresh(job)
+    
+    # 5. Enqueue Celery Task
+    task = process_imagery_analysis.delay(analysis.id, job.id)
+    
+    # Do not update DB with Celery task ID here, worker handles it to avoid race condition
+    return {
+        "analysis_id": analysis.id,
+        "job_id": job.id,
+        "status": "queued"
+    }
 
-@router.post("/{analysis_id}/run", response_model=AnalysisResponse)
+@router.post("/{analysis_id}/run")
 def run_ai_analysis(
     analysis_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["admin", "planner"]))
 ):
-    """Execute real SegFormer pretrained AI inference + OSM layer enrichment."""
-    analysis = db.query(ImageryAnalysis).filter(ImageryAnalysis.id == analysis_id).first()
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis record not found")
-
-    analysis.status = "processing"
-    db.commit()
-
-    try:
-        bounds = tuple(analysis.bounds or [77.58, 12.96, 77.60, 12.98])
-        
-        # 1. Run Pretrained SegFormer AI Model
-        ai_features, avg_conf, inf_time = AIService.run_inference(analysis.file_path, bounds)
-
-        # 2. Clear old features if re-running
-        db.query(SpatialFeature).filter(SpatialFeature.analysis_id == analysis.id).delete()
-
-        created_features = []
-        for feat_dict in ai_features:
-            feat = SpatialFeature(
-                analysis_id=analysis.id,
-                class_name=feat_dict["class_name"],
-                source=feat_dict["source"],
-                confidence=feat_dict["confidence"],
-                area_sq_meters=feat_dict["area_sq_meters"],
-                feature_count=feat_dict["feature_count"],
-                geometry_json=feat_dict["geometry_json"]
-            )
-            db.add(feat)
-            created_features.append(feat)
-
-        # 3. Query OpenStreetMap Enrichment Layer (Hospitals, Schools, Slums)
-        osm_features = OSMService.fetch_osm_enrichment(bounds)
-        for feat_dict in osm_features:
-            feat = SpatialFeature(
-                analysis_id=analysis.id,
-                class_name=feat_dict["class_name"],
-                source=feat_dict["source"],
-                confidence=feat_dict["confidence"],
-                area_sq_meters=feat_dict["area_sq_meters"],
-                feature_count=feat_dict["feature_count"],
-                geometry_json=feat_dict["geometry_json"],
-                properties=feat_dict.get("properties")
-            )
-            db.add(feat)
-            created_features.append(feat)
-
-        db.commit()
-
-        # 4. Compute Urban Infrastructure Benchmarks
-        bench_dict = BenchmarkService.calculate_benchmarks(
-            created_features, bounds, analysis.population_estimate
-        )
-
-        db.query(UrbanBenchmark).filter(UrbanBenchmark.analysis_id == analysis.id).delete()
-        benchmark = UrbanBenchmark(
-            analysis_id=analysis.id,
-            population_count=bench_dict["population_count"],
-            road_density_km_per_sqkm=bench_dict["road_density_km_per_sqkm"],
-            building_coverage_pct=bench_dict["building_coverage_pct"],
-            tree_cover_pct=bench_dict["tree_cover_pct"],
-            water_cover_pct=bench_dict["water_cover_pct"],
-            built_up_ratio=bench_dict["built_up_ratio"],
-            hospitals_per_10k_pop=bench_dict["hospitals_per_10k_pop"],
-            schools_per_10k_pop=bench_dict["schools_per_10k_pop"],
-            infrastructure_score=bench_dict["infrastructure_score"]
-        )
-        db.add(benchmark)
-
-        analysis.status = "completed"
-        analysis.confidence_score = avg_conf
-        analysis.inference_time_sec = inf_time
-        db.commit()
-        db.refresh(analysis)
-        return analysis
-
-    except Exception as e:
-        analysis.status = "failed"
-        analysis.error_message = str(e)
-        db.commit()
-        raise HTTPException(status_code=500, detail=f"Inference pipeline error: {e}")
+    """Deprecated. Processing is now asynchronous via /upload"""
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail="Synchronous processing is deprecated. Uploading automatically queues the job.")
 
 @router.get("/{analysis_id}/status", response_model=AnalysisResponse)
 def get_analysis_status(

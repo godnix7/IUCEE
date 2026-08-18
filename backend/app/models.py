@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Text, DateTime, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, Text, DateTime, Boolean, JSON, BigInteger
 from sqlalchemy.orm import relationship
+from geoalchemy2 import Geometry
 from datetime import datetime, timezone
 from app.core.database import Base
 
@@ -50,14 +51,23 @@ class ImageryAnalysis(Base):
     filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     file_type = Column(String, default="geotiff") # 'geotiff', 'drone_ortho', 'satellite_png'
-    crs = Column(String, default="EPSG:4326")
-    bounds = Column(JSON, nullable=True) # [min_lon, min_lat, max_lon, max_lat]
+    # Spatial metadata
+    original_crs = Column(String, nullable=True)
+    normalized_crs = Column(String, default="EPSG:4326")
+    bounds = Column(JSON, nullable=True) # [min_x, min_y, max_x, max_y] (geographic)
     width = Column(Integer, nullable=True)
     height = Column(Integer, nullable=True)
-    population_estimate = Column(Integer, default=1000)
+    resolution_x = Column(Float, nullable=True)
+    resolution_y = Column(Float, nullable=True)
+    footprint = Column(Geometry("POLYGON", srid=4326, spatial_index=True), nullable=True)
+
+    population_count = Column(Integer, nullable=True)
+    population_source = Column(String, nullable=True)
+    population_date = Column(DateTime, nullable=True)
     
     # 'pending', 'processing', 'completed', 'failed'
     status = Column(String, default="pending", index=True)
+    osm_enrichment_status = Column(String, default="pending", index=True)
     inference_time_sec = Column(Float, nullable=True)
     confidence_score = Column(Float, nullable=True)
     error_message = Column(Text, nullable=True)
@@ -67,7 +77,8 @@ class ImageryAnalysis(Base):
 
     project = relationship("Project", back_populates="analyses")
     spatial_features = relationship("SpatialFeature", back_populates="analysis", cascade="all, delete-orphan")
-    benchmark = relationship("UrbanBenchmark", back_populates="analysis", uselist=False, cascade="all, delete-orphan")
+    osm_features = relationship("OSMFeature", back_populates="analysis", cascade="all, delete-orphan")
+    analytics = relationship("SpatialAnalytics", back_populates="analysis", uselist=False, cascade="all, delete-orphan")
 
 class SpatialFeature(Base):
     __tablename__ = "spatial_features"
@@ -83,29 +94,141 @@ class SpatialFeature(Base):
     area_sq_meters = Column(Float, default=0.0)
     feature_count = Column(Integer, default=1)
     
-    geometry_json = Column(JSON, nullable=False)
+    # Metadata
+    model_name = Column(String, nullable=True)
+    model_version = Column(String, nullable=True)
+    source_identifier = Column(String, nullable=True)
+    
+    geometry = Column(Geometry("MULTIPOLYGON", srid=4326, spatial_index=True), nullable=True)
     properties = Column(JSON, nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     analysis = relationship("ImageryAnalysis", back_populates="spatial_features")
+    
+class OSMFeature(Base):
+    __tablename__ = "osm_features"
 
-class UrbanBenchmark(Base):
-    __tablename__ = "urban_benchmarks"
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_id = Column(Integer, ForeignKey("imagery_analyses.id"), index=True)
+    
+    osm_type = Column(String, index=True, nullable=False) # 'node', 'way', 'relation'
+    osm_id = Column(BigInteger, index=True, nullable=False)
+    
+    category = Column(String, index=True, nullable=False) # 'hospital', 'school', 'police', 'fire_station'
+    name = Column(String, nullable=True)
+    source = Column(String, default="openstreetmap")
+    
+    geometry = Column(Geometry("GEOMETRY", srid=4326, spatial_index=True), nullable=True)
+    tags = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    retrieved_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    analysis = relationship("ImageryAnalysis", back_populates="osm_features")
+
+class SpatialAnalytics(Base):
+    __tablename__ = "spatial_analytics"
 
     id = Column(Integer, primary_key=True, index=True)
     analysis_id = Column(Integer, ForeignKey("imagery_analyses.id"), unique=True, index=True)
     
-    population_count = Column(Integer, default=1000)
-    road_density_km_per_sqkm = Column(Float, default=0.0)
-    building_coverage_pct = Column(Float, default=0.0)
-    tree_cover_pct = Column(Float, default=0.0)
-    water_cover_pct = Column(Float, default=0.0)
-    built_up_ratio = Column(Float, default=0.0)
-    hospitals_per_10k_pop = Column(Float, default=0.0)
-    schools_per_10k_pop = Column(Float, default=0.0)
-    infrastructure_score = Column(Float, default=0.0) # 0.0 to 100.0 score
+    population_count = Column(Integer, nullable=True)
+    population_source = Column(String, nullable=True)
+    population_date = Column(DateTime, nullable=True)
+    
+    analysis_area_sq_km = Column(Float, nullable=True)
 
+    road_area_sq_m = Column(Float, nullable=True)
+    road_coverage_pct = Column(Float, nullable=True)
+    
+    building_area_sq_m = Column(Float, nullable=True)
+    building_coverage_pct = Column(Float, nullable=True)
+
+    tree_area_sq_m = Column(Float, nullable=True)
+    tree_cover_pct = Column(Float, nullable=True)
+    water_area_sq_m = Column(Float, nullable=True)
+    water_cover_pct = Column(Float, nullable=True)
+    
+    barren_area_sq_m = Column(Float, nullable=True)
+    barren_cover_pct = Column(Float, nullable=True)
+    agriculture_area_sq_m = Column(Float, nullable=True)
+    agriculture_cover_pct = Column(Float, nullable=True)
+
+    hospital_count = Column(Integer, nullable=True)
+    school_count = Column(Integer, nullable=True)
+    police_count = Column(Integer, nullable=True)
+    fire_station_count = Column(Integer, nullable=True)
+
+    hospitals_per_1000 = Column(Float, nullable=True)
+    schools_per_1000 = Column(Float, nullable=True)
+
+    infrastructure_score = Column(Float, nullable=True)
+    component_scores = Column(JSON, nullable=True)
+    formula_version = Column(String, default="1.0")
+    
+    calculated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    analysis = relationship("ImageryAnalysis", back_populates="analytics")
+
+class BenchmarkDefinition(Base):
+    __tablename__ = "benchmark_definitions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    indicator = Column(String, unique=True, index=True, nullable=False)
+    unit = Column(String, nullable=False)
+    target_value = Column(Float, nullable=False)
+    source = Column(String, nullable=False)
+    reference_name = Column(String, nullable=False)
+    effective_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    notes = Column(Text, nullable=True)
+
+class RefreshToken(Base):
+    """Persistent refresh token for secure rotation and family-level reuse detection."""
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String, unique=True, nullable=False, index=True)
+    token_family_id = Column(String, nullable=False, index=True)  # UUID grouping tokens in a rotation chain
+    expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    revoked_at = Column(DateTime, nullable=True)  # Set when token is revoked
+    replaced_by_id = Column(Integer, ForeignKey("refresh_tokens.id"), nullable=True)
+    user_agent = Column(String, nullable=True)
+    ip_address = Column(String, nullable=True)
 
-    analysis = relationship("ImageryAnalysis", back_populates="benchmark")
+    user = relationship("User")
+    replaced_by = relationship("RefreshToken", remote_side=[id])
+
+
+class ProcessingJob(Base):
+    __tablename__ = "processing_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_id = Column(Integer, ForeignKey("imagery_analyses.id"), index=True, nullable=False)
+    job_type = Column(String, default="analysis", index=True)
+    status = Column(String, default="queued", index=True) # queued, running, retrying, completed, failed, cancelled
+    progress = Column(Integer, default=0)
+    current_stage = Column(String, nullable=True) # VALIDATING, PREPARING_RASTER, AI_INFERENCE, POSTGIS_PERSISTENCE, OSM_ENRICHMENT, FINALIZING
+    message = Column(Text, nullable=True)
+    attempt = Column(Integer, default=1)
+    max_attempts = Column(Integer, default=3)
+    
+    worker_id = Column(String, nullable=True)
+    celery_task_id = Column(String, nullable=True, index=True)
+    
+    queued_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    failed_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    last_heartbeat_at = Column(DateTime, nullable=True)
+    
+    error_code = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    analysis = relationship("ImageryAnalysis", backref="jobs")

@@ -1,5 +1,7 @@
 import jwt
 import bcrypt
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from app.core.config import settings
@@ -18,7 +20,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Generate JWT Access Token."""
+    """Generate short-lived JWT Access Token (default: 15 minutes)."""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
@@ -28,13 +30,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
-def create_refresh_token(data: dict) -> str:
-    """Generate JWT Refresh Token."""
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire, "type": "refresh"})
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    return encoded_jwt
+def create_refresh_token_value() -> str:
+    """Generate a cryptographically secure random refresh token string."""
+    return secrets.token_urlsafe(48)
+
+def hash_token(token: str) -> str:
+    """Create a SHA-256 hash of a token for secure storage."""
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 def decode_token(token: str) -> Optional[Dict[str, Any]]:
     """Decode and validate JWT Token."""

@@ -87,7 +87,7 @@ hardcoded/mocked data, security vulnerabilities, and incorrect AI model selectio
 | 10 | Real analytics (remove mocks) | ⬜ Pending |
 | 11 | Reports & export | ⬜ Pending |
 | 12 | Error handling & file validation | ⬜ Pending |
-| 13 | Testing | ⬜ Pending |
+| 13 | Testing | 🔄 In Progress |
 
 ---
 

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 class AutoLabelRequest(BaseModel):
-    model_name: Optional[str] = "nvidia/segformer-b3-finetuned-ade-512-512"
+    model_name: Optional[str] = "wu-pr-gw/segformer-b2-finetuned-with-LoveDA"
 
 @router.post("/{project_id}/auto-label")
 def start_auto_labeling(project_id: int, request: Optional[AutoLabelRequest] = None, db: Session = Depends(get_db)):
@@ -22,7 +22,7 @@ def start_auto_labeling(project_id: int, request: Optional[AutoLabelRequest] = N
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    model_name = request.model_name if request else "nvidia/segformer-b3-finetuned-ade-512-512"
+    model_name = request.model_name if request else "wu-pr-gw/segformer-b2-finetuned-with-LoveDA"
     count = ProcessingService.enqueue_all(db, project_id, model_name)
     return {"message": f"Enqueued {count} images for background processing with {model_name}", "state": "RUNNING"}
 

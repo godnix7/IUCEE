@@ -128,7 +128,12 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Registration failed. Please try a different email."
         )
-    
+    if len(user_in.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long."
+        )
+        
     # Restrict direct registration to planner or viewer roles
     allowed_role = user_in.role if user_in.role in ["planner", "viewer"] else "planner"
     

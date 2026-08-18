@@ -36,11 +36,18 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user_id: int = payload.get("sub")
-    if not user_id:
+    sub = payload.get("sub")
+    if not sub:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
+        )
+    try:
+        user_id = int(sub)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user ID format",
         )
 
     user = db.query(User).filter(User.id == user_id).first()
@@ -61,3 +68,12 @@ def require_roles(allowed_roles: List[str]):
             )
         return current_user
     return role_checker
+
+def require_spatial_db():
+    """Ensure the database supports PostGIS. Fails cleanly on SQLite."""
+    from app.core.config import settings
+    if settings.DATABASE_URL.startswith("sqlite"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SPATIAL_DATABASE_REQUIRED: UrbanSense spatial analysis requires PostgreSQL + PostGIS."
+        )

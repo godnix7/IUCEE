@@ -1,8 +1,13 @@
 import os
-import cv2
+import time
+import math
 import numpy as np
 import torch
-from PIL import Image as PILImage
+import rasterio
+from rasterio.windows import Window
+from rasterio.features import shapes
+from shapely.geometry import shape, MultiPolygon
+from shapely.validation import make_valid
 from typing import Dict, List, Any, Tuple
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 from app.core.config import settings
@@ -11,195 +16,219 @@ class AIService:
     _processor = None
     _model = None
     _device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # AI Detection ONLY extracts land cover and physical structures from imagery:
-    # Roads, Buildings, Trees/Vegetation, Water, Barren Land, Built-up Area.
-    # Specialized POIs (Hospitals, Schools, Slums) are strictly fetched via GIS/OSM layer enrichment.
-    ADE_TO_AERIAL = {
-        # Building
-        1: "building", 25: "building", 48: "building", 51: "building", 79: "building", 84: "building",
-        # Road
-        6: "road", 54: "road", 61: "road", 91: "road", 140: "road",
-        # Tree Cover / Vegetation
-        4: "tree_cover", 17: "tree_cover", 66: "tree_cover", 72: "tree_cover", 106: "tree_cover",
-        # Water Body
-        21: "water", 26: "water", 60: "water", 128: "water",
-        # Barren Land / Open Ground
-        9: "barren_land", 13: "barren_land", 29: "barren_land", 46: "barren_land", 94: "barren_land"
+    
+    # LoveDA classes:
+    # 0: Ignore, 1: Background, 2: Building, 3: Road
+    # 4: Water, 5: Barren, 6: Forest, 7: Agricultural
+    LOVEDA_TO_URBANSENSE = {
+        2: "building",
+        3: "road",
+        4: "water",
+        5: "barren_land",
+        6: "tree_cover",
+        7: "agriculture"
     }
+    
+    TILE_SIZE = 512
+    STRIDE = 384  # ~25% overlap (512 - 128)
 
     @classmethod
     def load_model(cls):
-        """Lazy load pretrained SegFormer aerial inference model."""
+        """Lazy load pretrained SegFormer LoveDA model and AutoImageProcessor."""
         if cls._model is None:
             model_name = settings.PRETRAINED_SEGFORMER_MODEL
             try:
+                print(f"[AIService] Loading LoveDA model: {model_name} on {cls._device}")
                 cls._processor = SegformerImageProcessor.from_pretrained(model_name)
                 cls._model = SegformerForSemanticSegmentation.from_pretrained(model_name)
                 cls._model.to(cls._device)
                 cls._model.eval()
-                print(f"[AIService] Pretrained SegFormer loaded successfully on device: {cls._device}")
+                print("[AIService] Model loaded successfully.")
             except Exception as e:
-                print(f"[AIService] Error loading SegFormer '{model_name}': {e}")
-                # Secondary fallback checkpoint
-                try:
-                    fallback_name = "nvidia/mit-b0"
-                    cls._processor = SegformerImageProcessor.from_pretrained(fallback_name)
-                    cls._model = SegformerForSemanticSegmentation.from_pretrained(fallback_name)
-                    cls._model.to(cls._device)
-                    cls._model.eval()
-                except Exception as ex:
-                    print(f"[AIService] Fallback model load error: {ex}")
+                print(f"[AIService] Critical Error loading model '{model_name}': {e}")
+                raise RuntimeError(f"Failed to load AI model '{model_name}': {e}")
+
+    @classmethod
+    def _get_weight_window(cls, height: int, width: int) -> np.ndarray:
+        """Create a 2D Hann window for smooth overlap blending."""
+        w_y = np.hanning(height)
+        w_x = np.hanning(width)
+        weight_2d = np.outer(w_y, w_x)
+        return weight_2d.astype(np.float32)
 
     @classmethod
     def run_inference(
-        cls, image_path: str, bounds: Tuple[float, float, float, float] = (77.58, 12.96, 77.60, 12.98)
-    ) -> Tuple[List[Dict[str, Any]], float, float]:
+        cls, image_path: str, transform: Any, metadata: Dict[str, Any], progress_callback=None
+    ) -> Tuple[List[dict], float, float, int]:
         """
-        Run pretrained aerial SegFormer segmentation pipeline:
-        Tile / Image Input → Transformer Forward Pass → Upsample Logits → Extract Polygons → GeoJSON
+        Run pretrained SegFormer B2 LoveDA inference over a large GeoTIFF.
+        Returns: (features_list, avg_confidence, inference_time_sec, tiles_processed)
         """
-        import time
         start_time = time.time()
-
         cls.load_model()
 
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image path does not exist: {image_path}")
 
-        pil_img = PILImage.open(image_path).convert("RGB")
-        img_np = np.array(pil_img)
-        h, w, _ = img_np.shape
-        min_lon, min_lat, max_lon, max_lat = bounds
+        # Read Raster and validate
+        with rasterio.open(image_path) as src:
+            if src.count < 3:
+                raise ValueError(f"Raster requires at least 3 bands (RGB). Found {src.count}.")
+            
+            width = src.width
+            height = src.height
+            
+            # Estimate global arrays
+            num_classes = len(cls._model.config.id2label)
+            
+            # Using overlapping window sliding over the whole image.
+            # To avoid RAM explosion on massive rasters, we do tile-based processing.
+            # However, for global logits, we need a canvas.
+            global_logits = np.zeros((num_classes, height, width), dtype=np.float32)
+            global_weights = np.zeros((height, width), dtype=np.float32)
+            
+            # Read all RGB bands (Assuming 1,2,3 are R,G,B)
+            img_np = src.read([1, 2, 3]) 
+            img_np = np.transpose(img_np, (1, 2, 0)) # -> (H, W, 3)
 
-        features = []
-        confidence_scores = []
+        tiles_processed = 0
+        
+        # Calculate grid
+        x_steps = math.ceil((width - cls.TILE_SIZE) / cls.STRIDE) + 1 if width > cls.TILE_SIZE else 1
+        y_steps = math.ceil((height - cls.TILE_SIZE) / cls.STRIDE) + 1 if height > cls.TILE_SIZE else 1
+        total_tiles = x_steps * y_steps
 
-        if cls._model is not None and cls._processor is not None:
-            try:
-                inputs = cls._processor(images=pil_img, return_tensors="pt").to(cls._device)
-                with torch.no_grad():
+        with torch.inference_mode():
+            for y_idx in range(y_steps):
+                for x_idx in range(x_steps):
+                    # Calculate tile bounds
+                    start_y = y_idx * cls.STRIDE
+                    start_x = x_idx * cls.STRIDE
+                    
+                    # Adjust if we overshoot the image boundaries
+                    if start_y + cls.TILE_SIZE > height:
+                        start_y = max(0, height - cls.TILE_SIZE)
+                    if start_x + cls.TILE_SIZE > width:
+                        start_x = max(0, width - cls.TILE_SIZE)
+                        
+                    end_y = min(height, start_y + cls.TILE_SIZE)
+                    end_x = min(width, start_x + cls.TILE_SIZE)
+                    
+                    tile_h = end_y - start_y
+                    tile_w = end_x - start_x
+                    
+                    # Extract tile
+                    tile_img = img_np[start_y:end_y, start_x:end_x, :]
+                    
+                    # Prepare for HuggingFace (expects list of images or numpy array)
+                    inputs = cls._processor(images=tile_img, return_tensors="pt").to(cls._device)
                     outputs = cls._model(**inputs)
+                    
                     logits = outputs.logits # (1, num_classes, H/4, W/4)
+                    
+                    # Interpolate logits to match the EXACT tile size extracted (e.g. 512x512 or edge size)
+                    upsampled_logits = torch.nn.functional.interpolate(
+                        logits,
+                        size=(tile_h, tile_w),
+                        mode="bilinear",
+                        align_corners=False
+                    )
+                    
+                    # Squeeze batch dimension
+                    logits_np = upsampled_logits.squeeze(0).cpu().numpy()
+                    
+                    # Get blend weight
+                    weight = cls._get_weight_window(tile_h, tile_w)
+                    
+                    # Accumulate
+                    global_logits[:, start_y:end_y, start_x:end_x] += (logits_np * weight)
+                    global_weights[start_y:end_y, start_x:end_x] += weight
+                    
+                    tiles_processed += 1
+                    if progress_callback:
+                        progress_callback(tiles_processed, total_tiles)
 
-                upsampled_logits = torch.nn.functional.interpolate(
-                    logits,
-                    size=(h, w),
-                    mode="bilinear",
-                    align_corners=False
-                )
-                
-                probabilities = torch.softmax(upsampled_logits, dim=1)
-                conf_map, seg_mask = torch.max(probabilities, dim=1)
-                
-                seg_mask = seg_mask.squeeze(0).cpu().numpy()
-                conf_map = conf_map.squeeze(0).cpu().numpy()
-
-                confidence_scores.append(float(np.mean(conf_map)))
-
-                # Extract aerial land cover classes
-                for ade_id, target_class in cls.ADE_TO_AERIAL.items():
-                    class_mask = (seg_mask == ade_id).astype(np.uint8)
-                    if np.sum(class_mask) == 0:
-                        continue
-
-                    contours, _ = cv2.findContours(class_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    polygons = []
-                    total_area_px = 0.0
-
-                    for cnt in contours:
-                        if cv2.contourArea(cnt) < 25:
-                            continue
-
-                        total_area_px += cv2.contourArea(cnt)
-                        epsilon = 0.006 * cv2.arcLength(cnt, True)
-                        approx = cv2.approxPolyDP(cnt, epsilon, True)
-
-                        pts = []
-                        for pt in approx:
-                            px, py = pt[0]
-                            lon = min_lon + (px / w) * (max_lon - min_lon)
-                            lat = max_lat - (py / h) * (max_lat - min_lat)
-                            pts.append([round(lon, 6), round(lat, 6)])
-
-                        if len(pts) >= 3:
-                            if pts[0] != pts[-1]:
-                                pts.append(pts[0])
-                            polygons.append(pts)
-
-                    if polygons:
-                        lat_dist_m = abs(max_lat - min_lat) * 111000
-                        lon_dist_m = abs(max_lon - min_lon) * 111000 * np.cos(np.radians((min_lat + max_lat) / 2))
-                        total_image_area_m2 = lat_dist_m * lon_dist_m
-                        class_area_m2 = (total_area_px / (w * h)) * total_image_area_m2
-
-                        geometry = {
-                            "type": "MultiPolygon",
-                            "coordinates": [[poly] for poly in polygons]
-                        }
-
-                        features.append({
-                            "class_name": target_class,
-                            "source": "ai_segformer",
-                            "confidence": round(float(np.mean(conf_map[seg_mask == ade_id])), 3) if np.sum(seg_mask == ade_id) > 0 else 0.88,
-                            "area_sq_meters": round(float(class_area_m2), 2),
-                            "feature_count": len(polygons),
-                            "geometry_json": geometry
-                        })
-
-            except Exception as ex:
-                print(f"[AIService] SegFormer execution exception: {ex}")
-
-        if not features:
-            features = cls._opencv_fallback(img_np, bounds)
-
-        avg_conf = float(np.mean(confidence_scores)) if confidence_scores else 0.86
-        inf_time = round(time.time() - start_time, 2)
-        return features, avg_conf, inf_time
-
-    @classmethod
-    def _opencv_fallback(
-        cls, img_np: np.ndarray, bounds: Tuple[float, float, float, float]
-    ) -> List[Dict[str, Any]]:
-        """Extract vegetation, water, and barren land features using image thresholding."""
-        h, w, _ = img_np.shape
-        min_lon, min_lat, max_lon, max_lat = bounds
-        hsv = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
-
-        green_mask = cv2.inRange(hsv, (35, 40, 40), (85, 255, 255))
-        water_mask = cv2.inRange(hsv, (90, 50, 50), (130, 255, 255))
-
-        lat_dist_m = abs(max_lat - min_lat) * 111000
-        lon_dist_m = abs(max_lon - min_lon) * 111000 * np.cos(np.radians((min_lat + max_lat) / 2))
-        total_image_area_m2 = lat_dist_m * lon_dist_m
+        # Normalize logits by weights
+        global_weights[global_weights == 0] = 1.0 # prevent division by zero
+        global_logits /= global_weights
+        
+        # Softmax for probabilities and argmax for masks
+        global_tensor = torch.from_numpy(global_logits).unsqueeze(0)
+        probabilities = torch.softmax(global_tensor, dim=1)
+        conf_map, seg_mask = torch.max(probabilities, dim=1)
+        
+        seg_mask = seg_mask.squeeze(0).numpy().astype(np.uint8)
+        conf_map = conf_map.squeeze(0).numpy()
 
         features = []
-        for cat_name, mask in [("tree_cover", green_mask), ("water", water_mask)]:
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        confidences = []
+
+        src_crs = metadata.get("crs")
+        src_crs_str = "EPSG:4326"
+        if src_crs:
+            src_crs_str = f"EPSG:{src_crs.to_epsg()}" if src_crs.is_epsg_code else src_crs.to_wkt()
+
+        # Step 7: Class Consolidation
+        for model_id, target_class in cls.LOVEDA_TO_URBANSENSE.items():
+            class_mask = (seg_mask == model_id).astype(np.uint8)
+            if np.sum(class_mask) == 0:
+                continue
+
+            # Confidence for this class
+            class_conf = float(np.mean(conf_map[class_mask == 1]))
+            confidences.append(class_conf)
+            
+            # Step 10: Polygonization via Rasterio
+            shapes_gen = shapes(class_mask, mask=class_mask, transform=transform)
+            
             polygons = []
-            total_px = 0.0
-            for cnt in contours:
-                if cv2.contourArea(cnt) < 50:
+            
+            for geom_dict, val in shapes_gen:
+                if val != 1:
                     continue
-                total_px += cv2.contourArea(cnt)
-                pts = []
-                for pt in cnt[::6]:
-                    px, py = pt[0]
-                    lon = min_lon + (px / w) * (max_lon - min_lon)
-                    lat = max_lat - (py / h) * (max_lat - min_lat)
-                    pts.append([round(lon, 6), round(lat, 6)])
-                if len(pts) >= 3:
-                    pts.append(pts[0])
-                    polygons.append(pts)
+                    
+                # Convert to Shapely geometry
+                poly = shape(geom_dict)
+                if not poly.is_valid:
+                    poly = make_valid(poly)
+                
+                # Cleanup: remove zero-area or tiny slivers
+                if poly.is_empty or poly.area < 1e-6:
+                    continue
+                    
+                if poly.geom_type == 'MultiPolygon':
+                    for p in poly.geoms:
+                        if p.area >= 1e-6:
+                            polygons.append(p)
+                elif poly.geom_type == 'Polygon':
+                    polygons.append(poly)
+            
+            if not polygons:
+                continue
+                
+            # Combine into a single MultiPolygon in Source CRS
+            multi_poly_src = MultiPolygon(polygons)
+            
+            # Reproject to Geographic (EPSG:4326)
+            from app.services.geo_service import GeoService
+            multi_poly_4326 = GeoService.transform_geometry(multi_poly_src, src_crs_str, "EPSG:4326")
+            
+            # Calculate Area using Dynamic Metric CRS
+            metric_crs = GeoService.choose_metric_crs(multi_poly_4326)
+            multi_poly_metric = GeoService.transform_geometry(multi_poly_4326, "EPSG:4326", metric_crs)
+            area_sq_meters = multi_poly_metric.area
 
-            if polygons:
-                features.append({
-                    "class_name": cat_name,
-                    "source": "ai_segformer",
-                    "confidence": 0.85,
-                    "area_sq_meters": round((total_px / (w * h)) * total_image_area_m2, 2),
-                    "feature_count": len(polygons),
-                    "geometry_json": {"type": "MultiPolygon", "coordinates": [[p] for p in polygons]}
-                })
+            features.append({
+                "class_name": target_class,
+                "source": "ai_segformer_loveda",
+                "confidence": round(class_conf, 3),
+                "area_sq_meters": round(area_sq_meters, 2),
+                "feature_count": len(polygons),
+                "geometry_wkt": multi_poly_4326.wkt,
+                "model_name": settings.PRETRAINED_SEGFORMER_MODEL,
+                "model_version": "v1.0"
+            })
 
-        return features
+        avg_conf = float(np.mean(confidences)) if confidences else 0.0
+        inf_time = round(time.time() - start_time, 2)
+        return features, avg_conf, inf_time, tiles_processed

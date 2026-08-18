@@ -1,16 +1,45 @@
 import React, { useEffect, useState } from 'react';
 import { FileText, Download, Table as TableIcon } from 'lucide-react';
 import { api } from '../../api';
+import { useToast } from '../../context/ToastContext';
 import type { ImageryAnalysis } from '../../types';
 
 export const ReportsView: React.FC = () => {
   const [analyses, setAnalyses] = useState<ImageryAnalysis[]>([]);
+  const { addToast } = useToast();
 
   useEffect(() => {
     api.analytics.getDashboardStats().then(data => {
       setAnalyses(data.recent_analyses);
     });
   }, []);
+
+  const handleDownloadPdf = async (id: number) => {
+    try {
+      await api.reports.downloadPdf(id);
+    } catch (e) {
+      console.error(e);
+      addToast('Failed to download PDF report. Please try again.', 'error');
+    }
+  };
+
+  const handleDownloadCsv = async (id: number) => {
+    try {
+      await api.reports.downloadCsv(id);
+    } catch (e) {
+      console.error(e);
+      addToast('Failed to download CSV feature data. Please try again.', 'error');
+    }
+  };
+
+  const handleDownloadGeoJson = async (id: number) => {
+    try {
+      await api.reports.downloadGeoJson(id);
+    } catch (e) {
+      console.error(e);
+      addToast('Failed to download GeoJSON. Please try again.', 'error');
+    }
+  };
 
   return (
     <div className="flex-1 bg-[#0b0f19] text-white p-6 overflow-y-auto max-w-5xl mx-auto space-y-6">
@@ -40,29 +69,31 @@ export const ReportsView: React.FC = () => {
                 <tr key={item.id}>
                   <td className="p-3 font-mono font-semibold">#{item.id}</td>
                   <td className="p-3 font-medium text-white">{item.filename}</td>
-                  <td className="p-3">{item.population_estimate?.toLocaleString() || 1000} Citizens</td>
+                  <td className="p-3">{item.population_count !== null && item.population_count !== undefined ? `${item.population_count.toLocaleString()} Citizens` : 'Unavailable'}</td>
                   <td className="p-3">
                     <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
                       {item.status}
                     </span>
                   </td>
                   <td className="p-3 text-right space-x-2">
-                    <a
-                      href={api.reports.downloadPdfUrl(item.id)}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      onClick={() => handleDownloadPdf(item.id)}
                       className="px-2.5 py-1 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30 rounded font-medium inline-flex items-center gap-1"
                     >
                       <Download size={12} /> PDF Report
-                    </a>
-                    <a
-                      href={api.reports.downloadCsvUrl(item.id)}
-                      target="_blank"
-                      rel="noreferrer"
+                    </button>
+                    <button
+                      onClick={() => handleDownloadCsv(item.id)}
                       className="px-2.5 py-1 bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 rounded font-medium inline-flex items-center gap-1"
                     >
                       <TableIcon size={12} /> CSV Features
-                    </a>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadGeoJson(item.id)}
+                      className="px-2.5 py-1 bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 rounded font-medium inline-flex items-center gap-1"
+                    >
+                      <TableIcon size={12} /> GeoJSON
+                    </button>
                   </td>
                 </tr>
               ))}

@@ -5,7 +5,7 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-from app.models import ImageryAnalysis, UrbanBenchmark, SpatialFeature
+from app.models import ImageryAnalysis, SpatialAnalytics, SpatialFeature
 from typing import List
 
 class PDFService:
@@ -13,8 +13,9 @@ class PDFService:
     def generate_analysis_pdf(
         cls,
         analysis: ImageryAnalysis,
-        benchmark: UrbanBenchmark,
-        features: List[SpatialFeature]
+        analytics: SpatialAnalytics | None,
+        features: List[SpatialFeature],
+        benchmarks: List['BenchmarkDefinition'] = None
     ) -> bytes:
         """
         Generate a multi-page executive PDF report featuring:
@@ -95,8 +96,12 @@ class PDFService:
             [Paragraph("<b>Report Document</b>", body_style), Paragraph("Executive Infrastructure Assessment", body_style)],
             [Paragraph("<b>Target Image Analysis</b>", body_style), Paragraph(analysis.filename, body_style)],
             [Paragraph("<b>Analysis Reference ID</b>", body_style), Paragraph(f"#{analysis.id}", body_style)],
-            [Paragraph("<b>Coordinate System</b>", body_style), Paragraph(analysis.crs or "EPSG:4326", body_style)],
-            [Paragraph("<b>Estimated Population</b>", body_style), Paragraph(f"{analysis.population_estimate:,} Citizens", body_style)],
+            [Paragraph("<b>Coordinate System</b>", body_style), Paragraph(analysis.original_crs or analysis.normalized_crs or "EPSG:4326", body_style)],
+            [Paragraph("<b>Population</b>", body_style), Paragraph(f"{analysis.population_count:,} Citizens" if analysis.population_count else "Unavailable", body_style)],
+            [Paragraph("<b>Population Source</b>", body_style), Paragraph(analysis.population_source or "Unavailable", body_style)],
+            [Paragraph("<b>Population Date</b>", body_style), Paragraph(analysis.population_date.strftime("%Y-%m-%d") if analysis.population_date else "Unavailable", body_style)],
+            [Paragraph("<b>Formula Version</b>", body_style), Paragraph(analytics.formula_version if analytics and analytics.formula_version else "Unavailable", body_style)],
+            [Paragraph("<b>Calculated At</b>", body_style), Paragraph(analytics.calculated_at.strftime("%B %d, %Y - %H:%M UTC") if analytics and analytics.calculated_at else "Unavailable", body_style)],
             [Paragraph("<b>Report Generated Date</b>", body_style), Paragraph(analysis.created_at.strftime("%B %d, %Y - %H:%M UTC"), body_style)],
         ]
         meta_table = Table(meta_table_data, colWidths=[180, 320])
@@ -127,15 +132,21 @@ class PDFService:
         elements.append(Spacer(1, 10))
 
         # Infrastructure Score KPI Table
-        score_val = benchmark.infrastructure_score if benchmark else 0.0
-        score_color = "#22C55E" if score_val >= 70 else "#F59E0B" if score_val >= 40 else "#EF4444"
+        score_val = analytics.infrastructure_score if analytics and analytics.infrastructure_score is not None else None
+        score_color = "#22C55E" if score_val is not None and score_val >= 70 else "#F59E0B" if score_val is not None and score_val >= 40 else "#EF4444"
         kpi_data = [
             [
-                Paragraph(f"<b>Infrastructure Index</b><br/><font size=18 color='{score_color}'><b>{score_val}/100</b></font>", body_style),
-                Paragraph(f"<b>Road Density</b><br/><font size=14 color='{primary_color}'><b>{benchmark.road_density_km_per_sqkm if benchmark else 0.0} km/km²</b></font>", body_style),
-                Paragraph(f"<b>Building Ratio</b><br/><font size=14 color='{primary_color}'><b>{benchmark.building_coverage_pct if benchmark else 0.0}%</b></font>", body_style),
-                Paragraph(f"<b>Tree Cover</b><br/><font size=14 color='{primary_color}'><b>{benchmark.tree_cover_pct if benchmark else 0.0}%</b></font>", body_style),
-            ]
+                Paragraph(f"<b>Infrastructure Index</b><br/><font size=18 color='{score_color}'><b>{f'{score_val}/100' if score_val is not None else 'Unavailable'}</b></font>", body_style),
+                Paragraph(f"<b>Road Coverage</b><br/><font size=14 color='{primary_color}'><b>{analytics.road_coverage_pct if analytics and analytics.road_coverage_pct is not None else 'Unavailable'}%</b></font>", body_style),
+                Paragraph(f"<b>Building Coverage</b><br/><font size=14 color='{primary_color}'><b>{analytics.building_coverage_pct if analytics and analytics.building_coverage_pct is not None else 'Unavailable'}%</b></font>", body_style),
+                Paragraph(f"<b>Tree Cover</b><br/><font size=14 color='{primary_color}'><b>{analytics.tree_cover_pct if analytics and analytics.tree_cover_pct is not None else 'Unavailable'}%</b></font>", body_style),
+            ],
+            [
+                Paragraph(f"<b>Water Cover</b><br/><font size=14 color='{primary_color}'><b>{analytics.water_cover_pct if analytics and analytics.water_cover_pct is not None else 'Unavailable'}%</b></font>", body_style),
+                Paragraph(f"<b>Agriculture Cover</b><br/><font size=14 color='{primary_color}'><b>{analytics.agriculture_cover_pct if analytics and analytics.agriculture_cover_pct is not None else 'Unavailable'}%</b></font>", body_style),
+                Paragraph(f"<b>Barren Cover</b><br/><font size=14 color='{primary_color}'><b>{analytics.barren_cover_pct if analytics and analytics.barren_cover_pct is not None else 'Unavailable'}%</b></font>", body_style),
+                Paragraph(f"<b>Facilities Normalized</b><br/><font size=14 color='{primary_color}'><b>{'Available' if analytics and (analytics.hospitals_per_1000 is not None or analytics.schools_per_1000 is not None) else 'Unavailable'}</b></font>", body_style),
+            ],
         ]
         kpi_table = Table(kpi_data, colWidths=[125, 125, 125, 125])
         kpi_table.setStyle(TableStyle([
@@ -179,16 +190,26 @@ class PDFService:
         # PAGE 3: BENCHMARKS, RECOMMENDATIONS & METHODOLOGY
         # =========================================================================
         elements.append(Paragraph("3. Spatial Benchmark Evaluation", section_heading))
-        bench_data = [
-            ["Urban Metric Parameter", "Computed Value", "Target Standard", "Status"],
-            ["Road Network Density", f"{benchmark.road_density_km_per_sqkm if benchmark else 0.0} km/km²", "10.0 km/km²", "Sufficient" if (benchmark and benchmark.road_density_km_per_sqkm >= 8.0) else "Deficit"],
-            ["Building Coverage Ratio", f"{benchmark.building_coverage_pct if benchmark else 0.0}%", "25.0% - 40.0%", "Balanced"],
-            ["Tree Canopy Cover Ratio", f"{benchmark.tree_cover_pct if benchmark else 0.0}%", "15.0% Minimum", "Optimal" if (benchmark and benchmark.tree_cover_pct >= 15.0) else "Below Target"],
-            ["Water Body Ratio", f"{benchmark.water_cover_pct if benchmark else 0.0}%", "5.0% Minimum", "Normal"],
-            ["Hospitals / 10k Pop", f"{benchmark.hospitals_per_10k_pop if benchmark else 0.0}", "2.5 per 10k", "Adequate" if (benchmark and benchmark.hospitals_per_10k_pop >= 2.0) else "Action Needed"],
-            ["Schools / 10k Pop", f"{benchmark.schools_per_10k_pop if benchmark else 0.0}", "5.0 per 10k", "Adequate" if (benchmark and benchmark.schools_per_10k_pop >= 4.0) else "Action Needed"],
-        ]
-        bench_table = Table(bench_data, colWidths=[150, 110, 120, 120])
+        
+        bench_data = [["Urban Metric Parameter", "Computed Value", "Target Standard", "Status", "Source"]]
+        if analytics and analytics.component_scores:
+            for key, data in analytics.component_scores.items():
+                is_pct = 'cover' in key
+                val_str = f"{data.get('value', 0):.2f}{'%' if is_pct else ''}"
+                target_str = f"{data.get('target', 0):.2f}{'%' if is_pct else ''}"
+                diff = data.get('value', 0) - data.get('target', 0)
+                status = "Balanced"
+                if diff < 0:
+                    status = "Below Reference"
+                elif diff > 0:
+                    status = "Above Reference"
+                
+                source_str = data.get('source', 'Configured Reference')
+                bench_data.append([key.replace('_', ' ').title(), val_str, target_str, status, source_str])
+        else:
+            bench_data.append(["No benchmark data available", "-", "-", "-", "-"])
+
+        bench_table = Table(bench_data, colWidths=[120, 90, 90, 100, 100])
         bench_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#334155')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -200,7 +221,28 @@ class PDFService:
         elements.append(bench_table)
         elements.append(Spacer(1, 15))
 
-        elements.append(Paragraph("4. Strategic Planning Recommendations", section_heading))
+        elements.append(Paragraph("4. Data Provenance", section_heading))
+        prov_data = [
+            ["Data Point", "Provenance Source", "Notes"],
+            ["Roads, Buildings, Trees, Water, Barren", "AI Derived (SegFormer B2 LoveDA)", "Extracted via deep learning on input imagery"],
+            ["Hospitals, Schools, Police, Fire", "OpenStreetMap (Overpass API)", "Mapped GIS layers"],
+            ["Population", "User Supplied", analysis.population_source or "User input"],
+            ["Coverage %, Rates, Scores", "Calculated Metric", "UrbanSense PostGIS Analytics Engine"],
+            ["Benchmark Targets", "Configured Reference", "UrbanSense Benchmark Definitions"]
+        ]
+        prov_table = Table(prov_data, colWidths=[160, 180, 160])
+        prov_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, bg_light]),
+            ('PADDING', (0, 0), (-1, -1), 6),
+        ]))
+        elements.append(prov_table)
+        elements.append(Spacer(1, 15))
+
+        elements.append(Paragraph("5. Strategic Planning Recommendations", section_heading))
         rec_text = (
             "1. <b>Greenery Preservation:</b> Protect existing urban canopy cover and mandate green roofs in commercial zones.<br/>"
             "2. <b>Infrastructure Access:</b> Ensure public facilities (healthcare and schools) scale proportionally with population density.<br/>"
@@ -209,11 +251,17 @@ class PDFService:
         elements.append(Paragraph(rec_text, body_style))
         elements.append(Spacer(1, 15))
 
-        elements.append(Paragraph("5. Methodology & Appendix", section_heading))
+        elements.append(Paragraph("6. Methodology & Limitations", section_heading))
         methodology_text = (
             "<b>AI Segmentation Pipeline:</b> Imagery is tiled into sub-patches and passed through a pretrained SegFormer transformer "
             "model for semantic segmentation. Pixel masks are vector polygonized and simplified.<br/>"
-            "<b>OSM GIS Enrichment:</b> OpenStreetMap Overpass queries extract amenity nodes (hospitals, schools) and informal settlement boundaries."
+            "<b>OSM GIS Enrichment:</b> OpenStreetMap Overpass queries extract amenity nodes (hospitals, schools) and informal settlement boundaries.<br/><br/>"
+            "<b>Known Limitations:</b><br/>"
+            "- Pretrained LoveDA model may have domain shift limitations on significantly different geographies.<br/>"
+            "- Tiled inference can occasionally result in edge artifacts across tile boundaries despite overlapping sliding windows.<br/>"
+            "- Infrastructure scoring is dependent on accurate user-supplied population data.<br/>"
+            "- Road density is unavailable when only road polygons (and not centerlines) are detected.<br/>"
+            "- Facility counts are strictly dependent on OpenStreetMap completeness in the target region."
         )
         elements.append(Paragraph(methodology_text, body_style))
 

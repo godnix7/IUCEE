@@ -179,8 +179,7 @@ class ModelService:
 
         try:
             from transformers import AutoImageProcessor, AutoModelForSemanticSegmentation
-
-            model_id = "nvidia/segformer-b3-finetuned-ade-512-512"
+            model_id = "wu-pr-gw/segformer-b2-finetuned-with-LoveDA"
             ModelService._segformer_processor = AutoImageProcessor.from_pretrained(model_id)
             ModelService._segformer_model = AutoModelForSemanticSegmentation.from_pretrained(
                 model_id, torch_dtype=torch.float16 if device == "cuda" else torch.float32

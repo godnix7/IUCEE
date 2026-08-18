@@ -9,7 +9,6 @@ export interface User {
 
 export interface AuthTokens {
   access_token: string;
-  refresh_token: string;
   token_type: string;
   user: User;
 }
@@ -35,50 +34,67 @@ export interface SpatialFeature {
   properties?: any;
 }
 
-export interface UrbanBenchmark {
-  id: number;
-  analysis_id: number;
-  population_count: number;
-  road_density_km_per_sqkm: number;
-  building_coverage_pct: number;
-  tree_cover_pct: number;
-  water_cover_pct: number;
-  built_up_ratio: number;
-  hospitals_per_10k_pop: number;
-  schools_per_10k_pop: number;
-  infrastructure_score: number;
-  created_at: string;
-}
-
 export interface ImageryAnalysis {
   id: number;
   project_id: number;
   filename: string;
   file_path: string;
   file_type: string;
-  crs: string;
-  bounds?: number[];
-  width?: number;
-  height?: number;
-  population_estimate: number;
+  original_crs?: string | null;
+  normalized_crs?: string | null;
+  bounds?: number[] | null;
+  width?: number | null;
+  height?: number | null;
+  resolution_x?: number | null;
+  resolution_y?: number | null;
+  population_count?: number | null;
+  population_source?: string | null;
+  population_date?: string | null;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   inference_time_sec?: number;
   confidence_score?: number;
   error_message?: string;
   created_at: string;
-  benchmark?: UrbanBenchmark;
+}
+
+export interface PopulationData {
+  count: number | null;
+  source: string | null;
+  date: string | null;
+}
+
+export interface AnalyticsResponse {
+  analysis_id: number;
+  status?: string;
+  area_sq_km: number | null;
+  population: PopulationData;
+  infrastructure: {
+    road_area_sq_m: number | null;
+    road_coverage_pct: number | null;
+    building_coverage_pct: number | null;
+    tree_cover_pct: number | null;
+    water_cover_pct: number | null;
+    agriculture_cover_pct: number | null;
+    barren_cover_pct: number | null;
+  };
+  facilities: {
+    hospitals: number | null;
+    schools: number | null;
+    police: number | null;
+    fire_stations: number | null;
+  };
+  normalized: {
+    hospitals_per_1000: number | null;
+    schools_per_1000: number | null;
+  };
+  score: number | null;
+  component_scores: any;
+  formula_version?: string | null;
+  calculated_at?: string | null;
 }
 
 export interface DashboardStats {
   total_analyses: number;
-  infrastructure_coverage_pct: number;
-  roads_detected_km: number;
-  buildings_detected_count: number;
-  water_bodies_count: number;
-  tree_coverage_pct: number;
-  population_mapped: number;
-  infrastructure_score: number;
-  benchmark_status: string;
   recent_analyses: ImageryAnalysis[];
   processing_queue_count: number;
   active_users_count: number;

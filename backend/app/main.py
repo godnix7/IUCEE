@@ -8,7 +8,7 @@ from slowapi import _rate_limit_exceeded_handler
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.v1 import auth, projects, inference, gis, analytics, reports, users, jobs
+from app.api.v1 import auth, projects, inference, gis, analytics, reports, users, jobs, benchmarks
 
 # Initialize database schema and seed users (development only)
 init_db()
@@ -53,8 +53,9 @@ app.include_router(inference.router, prefix=f"{settings.API_V1_STR}/inference", 
 app.include_router(gis.router, prefix=f"{settings.API_V1_STR}/gis", tags=["gis"])
 app.include_router(analytics.router, prefix=f"{settings.API_V1_STR}/analytics", tags=["analytics"])
 app.include_router(reports.router, prefix=f"{settings.API_V1_STR}/reports", tags=["reports"])
-app.include_router(users.router, prefix=f"{settings.API_V1_STR}/users", tags=["users"])
-app.include_router(jobs.router, prefix=f"{settings.API_V1_STR}/jobs", tags=["jobs"])
+app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
+app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["Jobs"])
+app.include_router(benchmarks.router, prefix="/api/v1/benchmarks", tags=["Benchmarks"])
 
 @app.get("/health")
 def health_check():
