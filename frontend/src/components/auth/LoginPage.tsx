@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Eye, EyeOff, Lock, Mail, Sparkles, User as UserIcon } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { api } from '../../api';
+
 
 export const LoginPage: React.FC = () => {
   const { login } = useAuth();

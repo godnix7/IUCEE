@@ -29,7 +29,7 @@ function AppContent() {
   }
 
   if (!user) {
-    return <LoginPage onNavigateRegister={() => {}} onNavigateForgot={() => {}} />;
+    return <LoginPage />;
   }
 
   return (
