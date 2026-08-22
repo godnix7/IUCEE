@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "AI-Powered GIS Infrastructure Intelligence",
   "scripts": {
-    "dev": "docker-compose up --build",
-    "dev:detach": "docker-compose up --build -d",
+    "dev": "docker-compose up",
+    "dev:detach": "docker-compose up -d",
     "stop": "docker-compose down",
     "test:e2e": "python backend/verify_production.py"
   }

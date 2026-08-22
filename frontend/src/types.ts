@@ -34,12 +34,60 @@ export interface SpatialFeature {
   properties?: any;
 }
 
+export type ReviewStatus = 'pending' | 'accepted' | 'needs_relabel' | 'rejected';
+
+export interface DetectionReview {
+  id: number;
+  analysis_id: number;
+  feature_id: number;
+  reviewer_id?: number | null;
+  reviewer_email?: string | null;
+  original_label: string;
+  original_source?: string | null;
+  corrected_label?: string | null;
+  review_source?: string;
+  status: ReviewStatus;
+  comment?: string | null;
+  reviewed_at?: string | null;
+}
+
+export interface ReviewSummary {
+  total_features: number;
+  reviewed: number;
+  pending: number;
+  accepted: number;
+  needs_relabel: number;
+  rejected: number;
+  progress_pct: number;
+}
+
+export interface AnalysisReview {
+  id: number;
+  analysis_id: number;
+  reviewer_id?: number | null;
+  reviewer_email?: string | null;
+  status: 'pending' | 'accepted' | 'needs_relabel' | 'rejected';
+  comment?: string | null;
+  review_source?: string;
+  resent?: boolean;
+  resent_job_id?: number | null;
+  reviewed_at?: string | null;
+}
+
+export interface ReviewListResponse {
+  analysis_id: number;
+  summary: ReviewSummary;
+  reviews: DetectionReview[];
+  image_review?: AnalysisReview | null;
+}
+
 export interface ImageryAnalysis {
   id: number;
   project_id: number;
   filename: string;
   file_path: string;
   file_type: string;
+  analysis_mode?: 'segmentation' | 'detection' | 'scene_segmentation';
   original_crs?: string | null;
   normalized_crs?: string | null;
   bounds?: number[] | null;
@@ -54,6 +102,13 @@ export interface ImageryAnalysis {
   inference_time_sec?: number;
   confidence_score?: number;
   error_message?: string;
+  detection_summary?: {
+    class_counts: Record<string, number>;
+    total_detections: number;
+    geo_referenced: boolean;
+    model: string;
+  } | null;
+  detection_overlay_key?: string | null;
   created_at: string;
 }
 

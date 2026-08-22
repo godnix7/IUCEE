@@ -78,19 +78,22 @@ export const ReportsView: React.FC = () => {
                   <td className="p-3 text-right space-x-2">
                     <button
                       onClick={() => handleDownloadPdf(item.id)}
-                      className="px-2.5 py-1 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30 rounded font-medium inline-flex items-center gap-1"
+                      disabled={item.status !== 'completed'}
+                      className="px-2.5 py-1 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30 rounded font-medium inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Download size={12} /> PDF Report
                     </button>
                     <button
                       onClick={() => handleDownloadCsv(item.id)}
-                      className="px-2.5 py-1 bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 rounded font-medium inline-flex items-center gap-1"
+                      disabled={item.status !== 'completed'}
+                      className="px-2.5 py-1 bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 rounded font-medium inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <TableIcon size={12} /> CSV Features
                     </button>
                     <button
                       onClick={() => handleDownloadGeoJson(item.id)}
-                      className="px-2.5 py-1 bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 rounded font-medium inline-flex items-center gap-1"
+                      disabled={item.status !== 'completed'}
+                      className="px-2.5 py-1 bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 rounded font-medium inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <TableIcon size={12} /> GeoJSON
                     </button>

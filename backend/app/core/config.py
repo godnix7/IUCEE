@@ -40,11 +40,32 @@ class Settings(BaseSettings):
         "PRETRAINED_SEGFORMER_MODEL",
         "wu-pr-gw/segformer-b2-finetuned-with-LoveDA"
     )
+    # Object-detection model for oblique / drone imagery (COCO classes).
+    # facebook/detr-resnet-101 (ResNet-101 backbone) benchmarked 2026-08-19 as the strongest:
+    # at threshold 0.4 it yields cleaner, higher-confidence boxes with proper class diversity
+    # (person/car/motorcycle/truck) where yolos-small detected 0 motorcycles/trucks and kept a
+    # false-positive "bus". Requires the `timm` package (installed in the worker/backend images).
+    DETECTION_MODEL: str = os.getenv("DETECTION_MODEL", "facebook/detr-resnet-101")
+    DETECTION_THRESHOLD: float = float(os.getenv("DETECTION_THRESHOLD", "0.4"))
+    # ADE20K scene-parsing model for oblique / drone imagery semantic segmentation.
+    # Benchmarked 2026-08-19: strong road/building/tree/car/person parsing on VisDrone
+    # (LoveDA gives 0 roads on oblique views; ADE20K gives 13-48% road correctly).
+    SCENE_SEG_MODEL: str = os.getenv("SCENE_SEG_MODEL", "nvidia/segformer-b4-finetuned-ade-512-512")
+    # COCO classes relevant to urban / traffic analysis
+    DETECTION_CLASSES: List[str] = [
+        "person", "bicycle", "car", "motorcycle", "bus", "truck", "train", "boat"
+    ]
     USE_REAL_MODELS: bool = True
     MAX_CONCURRENCY: int = int(os.getenv("MAX_CONCURRENCY", "4"))
 
-    # OSM Overpass API configuration
-    OVERPASS_URL: str = os.getenv("OVERPASS_URL", "https://overpass.osm.ch/api/interpreter")
+    # OSM Overpass API configuration.
+    # Use the GLOBAL Overpass instance. (overpass.osm.ch is Switzerland-only and returns
+    # zero results elsewhere.) Accept either env var name (docker-compose sets OVERPASS_API_URL).
+    OVERPASS_URL: str = (
+        os.getenv("OVERPASS_URL")
+        or os.getenv("OVERPASS_API_URL")
+        or "https://overpass-api.de/api/interpreter"
+    )
     OSM_REQUEST_TIMEOUT: int = int(os.getenv("OSM_REQUEST_TIMEOUT", "30"))
     OSM_MAX_RETRIES: int = int(os.getenv("OSM_MAX_RETRIES", "2"))
     OSM_ENABLED: bool = os.getenv("OSM_ENABLED", "true").lower() == "true"
@@ -74,6 +95,8 @@ class Settings(BaseSettings):
 
     # CORS origins
     CORS_ORIGINS: List[str] = [
+        "http://localhost",
+        "http://127.0.0.1",
         "http://localhost:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5173",

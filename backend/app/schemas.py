@@ -2,6 +2,68 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+# --- Detection Review Schemas ---
+REVIEW_STATUSES = {"pending", "accepted", "needs_relabel", "rejected"}
+# Canonical AI land-cover classes valid as correction targets
+AI_CLASS_CHOICES = ["building", "road", "water", "barren_land", "tree_cover", "agriculture"]
+
+class ReviewUpsertRequest(BaseModel):
+    status: str = Field(..., description="pending | accepted | needs_relabel | rejected")
+    corrected_label: Optional[str] = Field(None, description="Required when status == needs_relabel")
+    comment: Optional[str] = None
+
+class ReviewResponse(BaseModel):
+    id: int
+    analysis_id: int
+    feature_id: int
+    reviewer_id: Optional[int] = None
+    reviewer_email: Optional[str] = None
+    original_label: str
+    original_source: Optional[str] = None
+    corrected_label: Optional[str] = None
+    review_source: Optional[str] = "human_review"
+    status: str
+    comment: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class ReviewSummary(BaseModel):
+    total_features: int
+    reviewed: int
+    pending: int
+    accepted: int
+    needs_relabel: int
+    rejected: int
+    progress_pct: float
+
+class ReviewListResponse(BaseModel):
+    analysis_id: int
+    summary: ReviewSummary
+    reviews: List[ReviewResponse]
+    image_review: Optional["AnalysisReviewResponse"] = None
+
+# --- Image-level (whole-analysis) review ---
+class AnalysisReviewRequest(BaseModel):
+    status: str = Field(..., description="accepted | needs_relabel | rejected")
+    comment: Optional[str] = None
+
+class AnalysisReviewResponse(BaseModel):
+    id: int
+    analysis_id: int
+    reviewer_id: Optional[int] = None
+    reviewer_email: Optional[str] = None
+    status: str
+    comment: Optional[str] = None
+    review_source: Optional[str] = "human_review"
+    resent: bool = False
+    resent_job_id: Optional[int] = None
+    reviewed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
 # --- Auth & User Schemas ---
 class UserLogin(BaseModel):
     email: EmailStr
@@ -147,6 +209,7 @@ class AnalysisResponse(BaseModel):
     filename: str
     file_path: str
     file_type: str
+    analysis_mode: Optional[str] = "segmentation"
     original_crs: Optional[str] = None
     normalized_crs: Optional[str] = None
     bounds: Optional[List[float]] = None
@@ -161,6 +224,8 @@ class AnalysisResponse(BaseModel):
     inference_time_sec: Optional[float] = None
     confidence_score: Optional[float] = None
     error_message: Optional[str] = None
+    detection_summary: Optional[dict] = None
+    detection_overlay_key: Optional[str] = None
     created_at: datetime
 
 

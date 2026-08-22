@@ -131,21 +131,54 @@ class PDFService:
         elements.append(Paragraph(summary_text, body_style))
         elements.append(Spacer(1, 10))
 
+        # ---- Mode-aware coverage resolution -------------------------------------
+        # Nadir segmentation stores m²-based coverage in SpatialAnalytics. Scene
+        # segmentation (oblique/drone, pixel-space) stores coverage % in the analysis
+        # summary; detection stores object counts. Surface whatever is actually available
+        # instead of blanket "Unavailable".
+        mode = (analysis.analysis_mode or "segmentation")
+        summary = analysis.detection_summary or {}
+        scene_cov = summary.get("class_counts") if summary.get("summary_type") == "scene_coverage_pct" else None
+        det_counts = summary.get("class_counts") if summary.get("summary_type") == "detection_counts" else None
+
+        _ana_cov = {}
+        if analytics is not None:
+            _ana_cov = {
+                "road": analytics.road_coverage_pct, "building": analytics.building_coverage_pct,
+                "tree_cover": analytics.tree_cover_pct, "water": analytics.water_cover_pct,
+                "agriculture": analytics.agriculture_cover_pct, "barren_land": analytics.barren_cover_pct,
+            }
+
+        def cov(cls: str) -> str:
+            v = _ana_cov.get(cls)
+            if v is not None:
+                return f"{v}%"
+            if scene_cov and cls in scene_cov:
+                return f"{scene_cov[cls]}%"
+            return "N/A"
+
+        pixel_space = mode in ("scene_segmentation", "detection") or not analysis.original_crs
+        na_reason = "N/A — requires georeferenced nadir imagery"
+
         # Infrastructure Score KPI Table
         score_val = analytics.infrastructure_score if analytics and analytics.infrastructure_score is not None else None
         score_color = "#22C55E" if score_val is not None and score_val >= 70 else "#F59E0B" if score_val is not None and score_val >= 40 else "#EF4444"
+        index_cell = (f"{score_val}/100" if score_val is not None
+                      else ("N/A" if pixel_space else "Unavailable"))
+        facilities_cell = ("Available" if analytics and (analytics.hospitals_per_1000 is not None or analytics.schools_per_1000 is not None)
+                           else ("N/A" if pixel_space else "Unavailable"))
         kpi_data = [
             [
-                Paragraph(f"<b>Infrastructure Index</b><br/><font size=18 color='{score_color}'><b>{f'{score_val}/100' if score_val is not None else 'Unavailable'}</b></font>", body_style),
-                Paragraph(f"<b>Road Coverage</b><br/><font size=14 color='{primary_color}'><b>{analytics.road_coverage_pct if analytics and analytics.road_coverage_pct is not None else 'Unavailable'}%</b></font>", body_style),
-                Paragraph(f"<b>Building Coverage</b><br/><font size=14 color='{primary_color}'><b>{analytics.building_coverage_pct if analytics and analytics.building_coverage_pct is not None else 'Unavailable'}%</b></font>", body_style),
-                Paragraph(f"<b>Tree Cover</b><br/><font size=14 color='{primary_color}'><b>{analytics.tree_cover_pct if analytics and analytics.tree_cover_pct is not None else 'Unavailable'}%</b></font>", body_style),
+                Paragraph(f"<b>Infrastructure Index</b><br/><font size=18 color='{score_color}'><b>{index_cell}</b></font>", body_style),
+                Paragraph(f"<b>Road Coverage</b><br/><font size=14 color='{primary_color}'><b>{cov('road')}</b></font>", body_style),
+                Paragraph(f"<b>Building Coverage</b><br/><font size=14 color='{primary_color}'><b>{cov('building')}</b></font>", body_style),
+                Paragraph(f"<b>Tree Cover</b><br/><font size=14 color='{primary_color}'><b>{cov('tree_cover')}</b></font>", body_style),
             ],
             [
-                Paragraph(f"<b>Water Cover</b><br/><font size=14 color='{primary_color}'><b>{analytics.water_cover_pct if analytics and analytics.water_cover_pct is not None else 'Unavailable'}%</b></font>", body_style),
-                Paragraph(f"<b>Agriculture Cover</b><br/><font size=14 color='{primary_color}'><b>{analytics.agriculture_cover_pct if analytics and analytics.agriculture_cover_pct is not None else 'Unavailable'}%</b></font>", body_style),
-                Paragraph(f"<b>Barren Cover</b><br/><font size=14 color='{primary_color}'><b>{analytics.barren_cover_pct if analytics and analytics.barren_cover_pct is not None else 'Unavailable'}%</b></font>", body_style),
-                Paragraph(f"<b>Facilities Normalized</b><br/><font size=14 color='{primary_color}'><b>{'Available' if analytics and (analytics.hospitals_per_1000 is not None or analytics.schools_per_1000 is not None) else 'Unavailable'}</b></font>", body_style),
+                Paragraph(f"<b>Water Cover</b><br/><font size=14 color='{primary_color}'><b>{cov('water')}</b></font>", body_style),
+                Paragraph(f"<b>Agriculture Cover</b><br/><font size=14 color='{primary_color}'><b>{cov('agriculture')}</b></font>", body_style),
+                Paragraph(f"<b>Barren Cover</b><br/><font size=14 color='{primary_color}'><b>{cov('barren_land')}</b></font>", body_style),
+                Paragraph(f"<b>Facilities Normalized</b><br/><font size=14 color='{primary_color}'><b>{facilities_cell}</b></font>", body_style),
             ],
         ]
         kpi_table = Table(kpi_data, colWidths=[125, 125, 125, 125])
@@ -157,21 +190,44 @@ class PDFService:
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ]))
         elements.append(kpi_table)
+        if pixel_space:
+            note = ("<b>Note:</b> This is a "
+                    + ("scene-segmentation" if mode == "scene_segmentation" else "detection" if mode == "detection" else "non-georeferenced")
+                    + " analysis of pixel-space imagery. Coverage is reported as % of image area; "
+                    "absolute areas (m²), the population-normalized Infrastructure Index and facility "
+                    "benchmarks require georeferenced nadir imagery with a valid CRS.")
+            elements.append(Spacer(1, 6))
+            elements.append(Paragraph(note, ParagraphStyle('KpiNote', parent=body_style, textColor=text_muted, fontSize=9)))
         elements.append(Spacer(1, 15))
 
         # Feature Breakdown Table
         elements.append(Paragraph("2. Detected Spatial Infrastructure Breakdown", section_heading))
-        feature_rows = [["Category", "Source Engine", "Confidence", "Area (m²)", "Count"]]
+        _SOURCE_LABEL = {
+            "ai_segformer": "SegFormer AI", "ai_segformer_loveda": "SegFormer LoveDA",
+            "ai_ade20k_scene": "ADE20K Scene AI", "detection_yolos": "YOLOS Detection",
+            "osm_layer": "OSM GIS Layer", "openstreetmap": "OSM GIS Layer",
+        }
+        is_scene = scene_cov is not None
+        # Scene mode reports coverage %; detection reports counts; segmentation reports m²
+        area_header = "Coverage" if is_scene else ("Objects" if det_counts is not None else "Area (m²)")
+        feature_rows = [["Category", "Source Engine", "Confidence", area_header, "Count"]]
         for f in features:
+            props = f.properties or {}
+            if is_scene and props.get("coverage_pct") is not None:
+                area_cell = f"{props['coverage_pct']}%"
+            elif f.area_sq_meters and f.area_sq_meters > 0:
+                area_cell = f"{f.area_sq_meters:,.1f}"
+            else:
+                area_cell = "—"
             feature_rows.append([
                 f.class_name.replace("_", " ").title(),
-                "SegFormer AI" if f.source == "ai_segformer" else "OSM GIS Layer",
-                f"{round(f.confidence * 100, 1)}%",
-                f"{f.area_sq_meters:,.1f}",
-                str(f.feature_count)
+                _SOURCE_LABEL.get(f.source, f.source or "—"),
+                f"{round((f.confidence or 0) * 100, 1)}%",
+                area_cell,
+                f"{f.feature_count:,}" if f.feature_count else "0",
             ])
         if len(feature_rows) == 1:
-            feature_rows.append(["No features detected", "-", "-", "0.0", "0"])
+            feature_rows.append(["No features detected", "-", "-", "—", "0"])
 
         feat_table = Table(feature_rows, colWidths=[120, 110, 80, 110, 80])
         feat_table.setStyle(TableStyle([
@@ -222,9 +278,12 @@ class PDFService:
         elements.append(Spacer(1, 15))
 
         elements.append(Paragraph("4. Data Provenance", section_heading))
+        _ai_model = summary.get("model") or (features[0].model_name if features and features[0].model_name else None)
+        _mode_label = {"scene_segmentation": "ADE20K scene segmentation", "detection": "COCO object detection"}.get(mode, "SegFormer LoveDA segmentation")
+        _ai_prov = f"AI Derived ({_ai_model})" if _ai_model else f"AI Derived ({_mode_label})"
         prov_data = [
             ["Data Point", "Provenance Source", "Notes"],
-            ["Roads, Buildings, Trees, Water, Barren", "AI Derived (SegFormer B2 LoveDA)", "Extracted via deep learning on input imagery"],
+            ["AI-Detected Classes", _ai_prov, f"{_mode_label} on input imagery"],
             ["Hospitals, Schools, Police, Fire", "OpenStreetMap (Overpass API)", "Mapped GIS layers"],
             ["Population", "User Supplied", analysis.population_source or "User input"],
             ["Coverage %, Rates, Scores", "Calculated Metric", "UrbanSense PostGIS Analytics Engine"],

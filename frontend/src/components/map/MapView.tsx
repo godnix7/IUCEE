@@ -14,6 +14,7 @@ interface MapViewProps {
   onFeatureSelect: (feature: any) => void;
   bounds?: number[]; // [minX, minY, maxX, maxY]
   onClearDraw?: () => void;
+  highlightClass?: string | null; // when set, that class is illuminated and others dimmed
 }
 
 const BASEMAP_STYLES = {
@@ -44,16 +45,22 @@ const BASEMAP_STYLES = {
     sources: {
       'terrain-source': {
         type: 'raster',
-        tiles: ['https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg'],
-        tileSize: 256
+        // OpenTopoMap (the old Stamen terrain endpoint is dead / CORS-blocked)
+        tiles: [
+          'https://a.tile.opentopomap.org/{z}/{x}/{y}.png',
+          'https://b.tile.opentopomap.org/{z}/{x}/{y}.png',
+          'https://c.tile.opentopomap.org/{z}/{x}/{y}.png'
+        ],
+        tileSize: 256,
+        attribution: '© OpenTopoMap (CC-BY-SA)'
       }
     },
-    layers: [{ id: 'terrain', type: 'raster', source: 'terrain-source', minzoom: 0, maxzoom: 18 }]
+    layers: [{ id: 'terrain', type: 'raster', source: 'terrain-source', minzoom: 0, maxzoom: 17 }]
   }
 };
 
 export const MapView = React.forwardRef<maplibregl.Map | null, MapViewProps>(({
-  aiGeoJson, osmGeoJson, layers, basemap, mode, onFeatureSelect, bounds, onClearDraw
+  aiGeoJson, osmGeoJson, layers, basemap, mode, onFeatureSelect, bounds, onClearDraw, highlightClass
 }, ref) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<maplibregl.Map | null>(null);
@@ -175,29 +182,39 @@ export const MapView = React.forwardRef<maplibregl.Map | null, MapViewProps>(({
     ], { padding: 40 });
   }, [bounds, mapLoaded]);
 
-  // Sync Layers config (opacity, visibility)
+  // Sync Layers config (opacity, visibility) + class highlight
   useEffect(() => {
     if (!mapLoaded || !mapInstance.current) return;
     const map = mapInstance.current;
-    
+    const hi = highlightClass || null;
+
     layers.forEach(layerConfig => {
-      // Find all maplibre layers that correspond to this conceptual layer
       const mapLayerIds = drawLayerIds.current.filter(id => id.startsWith(`${layerConfig.id}-`));
+      const isHighlighted = hi ? layerConfig.id === hi : null;
+      // Base opacities from config, then override when a class is highlighted
+      let fillOp = layerConfig.opacity * 0.4;
+      let lineOp = layerConfig.opacity;
+      let lineWidth = 2;
+      if (hi) {
+        if (isHighlighted) { fillOp = 0.75; lineOp = 1; lineWidth = 4; }
+        else { fillOp = 0.05; lineOp = 0.12; lineWidth = 1; }
+      }
       mapLayerIds.forEach(id => {
         const layer = map.getLayer(id);
-        if (layer) {
-          map.setLayoutProperty(id, 'visibility', layerConfig.visible ? 'visible' : 'none');
-          if (layer.type === 'fill') {
-            map.setPaintProperty(id, 'fill-opacity', layerConfig.opacity * 0.4);
-          } else if (layer.type === 'line') {
-            map.setPaintProperty(id, 'line-opacity', layerConfig.opacity);
-          } else if (layer.type === 'circle') {
-            map.setPaintProperty(id, 'circle-opacity', layerConfig.opacity);
-          }
+        if (!layer) return;
+        map.setLayoutProperty(id, 'visibility', layerConfig.visible ? 'visible' : 'none');
+        if (layer.type === 'fill') {
+          map.setPaintProperty(id, 'fill-opacity', layerConfig.visible ? fillOp : 0);
+        } else if (layer.type === 'line') {
+          map.setPaintProperty(id, 'line-opacity', layerConfig.visible ? lineOp : 0);
+          map.setPaintProperty(id, 'line-width', lineWidth);
+        } else if (layer.type === 'circle') {
+          map.setPaintProperty(id, 'circle-opacity', layerConfig.visible ? lineOp : 0);
+          map.setPaintProperty(id, 'circle-radius', hi && isHighlighted ? 8 : 5);
         }
       });
     });
-  }, [layers, mapLoaded]);
+  }, [layers, mapLoaded, highlightClass]);
 
   const addDataLayers = (map: maplibregl.Map, layerConfigs: MapLayerConfig[]) => {
     // Clear old tracked layers
@@ -210,13 +227,13 @@ export const MapView = React.forwardRef<maplibregl.Map | null, MapViewProps>(({
       
       const filterMatch = ['==', isOSM ? ['get', 'category'] : ['get', 'class_name'], config.id];
 
-      // Fill
+      // Fill (Polygon + MultiPolygon — MapLibre reports them as distinct geometry types)
       const fillId = `${config.id}-fill`;
       map.addLayer({
         id: fillId,
         type: 'fill',
         source: source,
-        filter: ['all', filterMatch, ['==', ['geometry-type'], 'Polygon']] as any,
+        filter: ['all', filterMatch, ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]]] as any,
         paint: {
           'fill-color': color,
           'fill-opacity': config.visible ? config.opacity * 0.4 : 0
@@ -225,13 +242,13 @@ export const MapView = React.forwardRef<maplibregl.Map | null, MapViewProps>(({
       });
       drawLayerIds.current.push(fillId);
 
-      // Line
+      // Line (polygon outlines + line features, incl. Multi variants)
       const lineId = `${config.id}-line`;
       map.addLayer({
         id: lineId,
         type: 'line',
         source: source,
-        filter: ['all', filterMatch, ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'LineString']]] as any,
+        filter: ['all', filterMatch, ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon', 'LineString', 'MultiLineString']]]] as any,
         paint: {
           'line-color': color,
           'line-width': isOSM ? 1 : 2,
@@ -247,7 +264,7 @@ export const MapView = React.forwardRef<maplibregl.Map | null, MapViewProps>(({
         id: pointId,
         type: 'circle',
         source: source,
-        filter: ['all', filterMatch, ['==', ['geometry-type'], 'Point']] as any,
+        filter: ['all', filterMatch, ['in', ['geometry-type'], ['literal', ['Point', 'MultiPoint']]]] as any,
         paint: {
           'circle-color': color,
           'circle-radius': 5,

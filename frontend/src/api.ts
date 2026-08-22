@@ -165,9 +165,10 @@ export const api = {
   },
 
   inference: {
-    upload: async (projectId: number, file: File, populationCount?: number, populationSource?: string, populationDate?: string): Promise<ImageryAnalysis> => {
+    upload: async (projectId: number, file: File, populationCount?: number, populationSource?: string, populationDate?: string, analysisMode: 'segmentation' | 'detection' | 'scene_segmentation' = 'segmentation'): Promise<{ analysis_id: number, job_id: number, status: string }> => {
       const formData = new FormData();
       formData.append('project_id', projectId.toString());
+      formData.append('analysis_mode', analysisMode);
       if (populationCount !== undefined) formData.append('population_count', populationCount.toString());
       if (populationSource) formData.append('population_source', populationSource);
       if (populationDate) formData.append('population_date', populationDate);
@@ -182,6 +183,15 @@ export const api = {
         throw new Error(err.detail || 'Upload failed');
       }
       return res.json();
+    },
+
+    // Detection overlays are auth-protected, so <img src> can't load them directly.
+    // Fetch the bytes with the bearer token and return an object URL.
+    getDetectionOverlayUrl: async (analysisId: number): Promise<string> => {
+      const res = await authFetch(`${API_BASE}/inference/${analysisId}/detection-overlay`);
+      if (!res.ok) throw new Error('Failed to fetch detection overlay');
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
     },
 
     run: async (analysisId: number): Promise<ImageryAnalysis> => {
@@ -213,6 +223,73 @@ export const api = {
       if (!res.ok) throw new Error('Failed to load OSM layer data');
       return res.json();
     }
+  },
+
+  jobs: {
+    list: async (params?: { status?: string; analysis_id?: number; page?: number; page_size?: number }): Promise<any> => {
+      const q = new URLSearchParams();
+      if (params?.status) q.set('status', params.status);
+      if (params?.analysis_id) q.set('analysis_id', String(params.analysis_id));
+      if (params?.page) q.set('page', String(params.page));
+      if (params?.page_size) q.set('page_size', String(params.page_size));
+      const res = await authFetch(`${API_BASE}/jobs/?${q.toString()}`);
+      if (!res.ok) throw new Error('Failed to load jobs');
+      return res.json();
+    },
+    cancel: async (id: number): Promise<void> => {
+      const res = await authFetch(`${API_BASE}/jobs/${id}/cancel`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to cancel job' }));
+        throw new Error(err.detail || 'Failed to cancel job');
+      }
+    },
+    retry: async (id: number): Promise<void> => {
+      const res = await authFetch(`${API_BASE}/jobs/${id}/retry`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to retry job' }));
+        throw new Error(err.detail || 'Failed to retry job');
+      }
+    },
+  },
+
+  review: {
+    list: async (analysisId: number): Promise<import('./types').ReviewListResponse> => {
+      const res = await authFetch(`${API_BASE}/review/analyses/${analysisId}/reviews`);
+      if (!res.ok) throw new Error('Failed to load detection reviews');
+      return res.json();
+    },
+    upsert: async (
+      analysisId: number,
+      featureId: number,
+      body: { status: string; corrected_label?: string | null; comment?: string | null }
+    ): Promise<import('./types').DetectionReview> => {
+      const res = await authFetch(`${API_BASE}/review/analyses/${analysisId}/features/${featureId}/review`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to save review' }));
+        throw new Error(err.detail || 'Failed to save review');
+      }
+      return res.json();
+    },
+    // Single whole-image verdict; 'needs_relabel' re-sends the entire image for reprocessing.
+    imageReview: async (
+      analysisId: number,
+      body: { status: 'accepted' | 'needs_relabel' | 'rejected'; comment?: string | null }
+    ): Promise<import('./types').AnalysisReview> => {
+      const res = await authFetch(`${API_BASE}/review/analyses/${analysisId}/image-review`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to save review' }));
+        throw new Error(err.detail || 'Failed to save review');
+      }
+      return res.json();
+    },
   },
 
   analytics: {

@@ -50,6 +50,8 @@ def get_analysis_geojson(
             "confidence": f.confidence,
             "area_sq_meters": f.area_sq_meters,
             "feature_count": f.feature_count,
+            "model_name": f.model_name,
+            "model_version": f.model_version,
             "color": CLASS_COLOR_MAP.get(f.class_name, "#94a3b8")
         }
         if f.properties:

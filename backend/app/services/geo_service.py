@@ -73,16 +73,17 @@ class GeoService:
         return transform(project, geom)
 
     @staticmethod
-    def choose_metric_crs(geom: Polygon) -> str:
+    def choose_metric_crs(geom) -> str:
         """
         Create a clear CRS utility for choosing an appropriate metric projection.
-        Calculates a dynamic UTM zone based on the geometry's centroid (assumes input is EPSG:4326).
+        Calculates a dynamic UTM zone based on the geometry's centroid.
         """
         centroid = geom.centroid
         lon, lat = centroid.x, centroid.y
         
         # Calculate UTM zone from longitude
         zone_number = int((lon + 180) / 6) + 1
+        zone_number = max(1, min(60, zone_number)) # Cap zone to [1, 60] for unreferenced images
         
         # Determine hemisphere (North/South)
         hemisphere = 'N' if lat >= 0 else 'S'

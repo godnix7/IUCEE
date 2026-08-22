@@ -51,6 +51,8 @@ class ImageryAnalysis(Base):
     filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     file_type = Column(String, default="geotiff") # 'geotiff', 'drone_ortho', 'satellite_png'
+    # Analysis pipeline: 'segmentation' (LoveDA land-cover) or 'detection' (COCO object detection)
+    analysis_mode = Column(String, default="segmentation", index=True)
     # Spatial metadata
     original_crs = Column(String, nullable=True)
     normalized_crs = Column(String, default="EPSG:4326")
@@ -71,6 +73,9 @@ class ImageryAnalysis(Base):
     inference_time_sec = Column(Float, nullable=True)
     confidence_score = Column(Float, nullable=True)
     error_message = Column(Text, nullable=True)
+    # Detection-mode outputs (object detection on drone/oblique imagery)
+    detection_overlay_key = Column(String, nullable=True)  # MinIO key of annotated image
+    detection_summary = Column(JSON, nullable=True)        # {class: count, ...} + totals
     
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -232,3 +237,71 @@ class ProcessingJob(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     analysis = relationship("ImageryAnalysis", backref="jobs")
+
+
+class DetectionReview(Base):
+    """
+    Human QA / relabeling record for an AI-detected SpatialFeature.
+
+    Provenance-preserving: the original AI prediction is NEVER overwritten. This row records
+    the original label at review time plus any human correction, keeping full auditability.
+    One current review per feature (upserted); the review row itself preserves original vs
+    corrected so the AI's prediction always remains available.
+    """
+    __tablename__ = "detection_reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_id = Column(Integer, ForeignKey("imagery_analyses.id"), index=True, nullable=False)
+    feature_id = Column(Integer, ForeignKey("spatial_features.id", ondelete="CASCADE"), index=True, nullable=False, unique=True)
+    reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    # Provenance (original AI prediction — never mutated)
+    original_label = Column(String, nullable=False)
+    original_source = Column(String, nullable=True)   # e.g. ai_segformer_loveda / detection_yolos
+
+    # Human correction (only set when relabeling)
+    corrected_label = Column(String, nullable=True)
+    review_source = Column(String, default="human_review")
+
+    # pending | accepted | needs_relabel | rejected
+    status = Column(String, default="pending", index=True)
+    comment = Column(Text, nullable=True)
+
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    analysis = relationship("ImageryAnalysis")
+    feature = relationship("SpatialFeature")
+    reviewer = relationship("User")
+
+
+class AnalysisReview(Base):
+    """
+    Image-level (whole-analysis) human verdict. One review per analysis (upserted).
+
+    Instead of per-class decisions, the reviewer accepts the whole image, or flags it
+    ('needs_relabel') which re-sends the entire image through the pipeline for reprocessing,
+    or rejects it. The AI output is never mutated — this is a QA verdict + audit record.
+    """
+    __tablename__ = "analysis_reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_id = Column(Integer, ForeignKey("imagery_analyses.id"), index=True, nullable=False, unique=True)
+    reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    # accepted | needs_relabel | rejected | pending
+    status = Column(String, default="pending", index=True)
+    comment = Column(Text, nullable=True)
+    review_source = Column(String, default="human_review")
+
+    # Re-send provenance: set when a 'needs_relabel' verdict re-queues the whole image
+    resent = Column(Boolean, default=False)
+    resent_job_id = Column(Integer, nullable=True)
+
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    analysis = relationship("ImageryAnalysis")
+    reviewer = relationship("User")

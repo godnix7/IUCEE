@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Loader2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Upload, Loader2, MapPin } from 'lucide-react';
 import { api } from '../../api';
 import type { ImageryAnalysis, MapLayerConfig, Project } from '../../types';
 import { MapView } from './MapView';
@@ -15,8 +16,13 @@ import * as turf from '@turf/turf';
 
 export const GisExplorerView: React.FC<{ onNavigateUpload: () => void }> = ({ onNavigateUpload }) => {
   const { addToast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(() => {
+    const saved = sessionStorage.getItem('selectedProjectId');
+    return saved ? Number(saved) : null;
+  });
+  const [analyses, setAnalyses] = useState<ImageryAnalysis[]>([]);
   const [selectedAnalysis, setSelectedAnalysis] = useState<ImageryAnalysis | null>(null);
   
   const [aiGeoJson, setAiGeoJson] = useState<any>(null);
@@ -49,25 +55,45 @@ export const GisExplorerView: React.FC<{ onNavigateUpload: () => void }> = ({ on
   useEffect(() => {
     api.projects.list().then((projs) => {
       setProjects(projs);
-      if (projs.length > 0) {
+      if (projs.length > 0 && !selectedProjectId) {
         setSelectedProjectId(projs[0].id);
       }
     }).catch(console.error);
   }, []);
 
   useEffect(() => {
+    if (selectedProjectId) sessionStorage.setItem('selectedProjectId', selectedProjectId.toString());
+  }, [selectedProjectId]);
+
+  useEffect(() => {
     if (!selectedProjectId) return;
-    api.analytics.getDashboardStats().then((data) => {
-      if (data.recent_analyses.length > 0) {
-        // Load the most recent analysis
-        const analysis = data.recent_analyses.find(a => a.status === 'completed') || data.recent_analyses[0];
-        loadAnalysis(analysis);
+    api.analytics.getDashboardStats().then(async (data) => {
+      setAnalyses(data.recent_analyses);
+      // analysisId is carried in the URL (?analysisId=) so it survives reload / deep-links
+      const urlAnalysisId = searchParams.get('analysisId');
+      if (!urlAnalysisId) return;
+      const id = Number(urlAnalysisId);
+      let analysis = data.recent_analyses.find(a => a.id === id) || null;
+      // Deep-link may reference an analysis outside the "recent" window — fetch it directly.
+      if (!analysis) {
+        try {
+          analysis = await api.inference.getStatus(id);
+          setAnalyses(prev => (prev.some(a => a.id === id) ? prev : [analysis as ImageryAnalysis, ...prev]));
+        } catch {
+          analysis = null;
+        }
       }
+      if (analysis) loadAnalysis(analysis);
     }).catch(console.error);
   }, [selectedProjectId]);
 
   const loadAnalysis = async (an: ImageryAnalysis) => {
     setSelectedAnalysis(an);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('analysisId', String(an.id));
+      return next;
+    }, { replace: true });
     setLoading(true);
     setError(null);
     setAiGeoJson(null);
@@ -160,6 +186,30 @@ export const GisExplorerView: React.FC<{ onNavigateUpload: () => void }> = ({ on
           >
             {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
+
+          <select 
+            value={selectedAnalysis?.id || ''} 
+            onChange={(e) => {
+              const val = e.target.value;
+              if (!val) {
+                setSelectedAnalysis(null);
+                setAiGeoJson(null);
+                setOsmGeoJson(null);
+                setSearchParams((prev) => {
+                  const next = new URLSearchParams(prev);
+                  next.delete('analysisId');
+                  return next;
+                }, { replace: true });
+              } else {
+                const an = analyses.find(a => a.id === Number(val));
+                if (an) loadAnalysis(an);
+              }
+            }}
+            className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm outline-none focus:border-blue-500"
+          >
+            <option value="">Default Map (Bangalore)</option>
+            {analyses.map(a => <option key={a.id} value={a.id}>Analysis #{a.id} - {a.filename}</option>)}
+          </select>
           
           <button
             onClick={onNavigateUpload}
@@ -218,8 +268,36 @@ export const GisExplorerView: React.FC<{ onNavigateUpload: () => void }> = ({ on
           )}
 
           {!loading && !selectedAnalysis && (
-            <div className="absolute inset-0 z-50 bg-slate-900 flex flex-col items-center justify-center text-slate-400">
-              Select an analysis to explore GIS data.
+            <div className="absolute inset-0 z-40 flex items-center justify-center p-6 pointer-events-none">
+              <div className="pointer-events-auto bg-[#0b0f19]/92 backdrop-blur-sm border border-slate-700 rounded-2xl p-6 max-w-md text-center shadow-2xl">
+                <div className="w-12 h-12 rounded-xl bg-blue-600/15 border border-blue-500/30 flex items-center justify-center mx-auto mb-3">
+                  <MapPin className="text-blue-400" size={22} />
+                </div>
+                <h3 className="text-white font-semibold text-sm mb-1.5">GIS Explorer</h3>
+                <p className="text-xs text-slate-400 leading-relaxed mb-4">
+                  Overlay a completed analysis's AI-detected features (buildings, roads, water, vegetation)
+                  and OpenStreetMap facilities on the live map. Toggle layers, measure distance &amp; area,
+                  draw regions, and click any feature to inspect its metrics.
+                </p>
+                {analyses.length > 0 ? (
+                  <div className="text-left">
+                    <label className="block text-[11px] text-slate-500 mb-1.5">Pick an analysis to begin</label>
+                    <select
+                      defaultValue=""
+                      onChange={(e) => { const an = analyses.find(a => a.id === Number(e.target.value)); if (an) loadAnalysis(an); }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="" disabled>Select analysis…</option>
+                      {analyses.map(a => <option key={a.id} value={a.id}>Analysis #{a.id} — {a.filename}</option>)}
+                    </select>
+                  </div>
+                ) : (
+                  <button onClick={onNavigateUpload} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium inline-flex items-center gap-1.5">
+                    <Upload size={14} /> Upload imagery
+                  </button>
+                )}
+                <p className="text-[10px] text-slate-600 mt-3">Map is centered on Bengaluru until an analysis is selected.</p>
+              </div>
             </div>
           )}
 
@@ -256,7 +334,7 @@ export const GisExplorerView: React.FC<{ onNavigateUpload: () => void }> = ({ on
              />
           )}
           
-          <MapLegend />
+          <MapLegend layers={selectedAnalysis ? layers : undefined} />
         </div>
 
         <FeatureInspector feature={selectedFeature} onZoomFeature={(f) => {

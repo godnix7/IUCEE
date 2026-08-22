@@ -13,9 +13,21 @@ export const MapStatusBar: React.FC<MapStatusBarProps> = ({
 }) => {
   return (
     <div className="h-8 bg-[#111827] border-t border-slate-800 flex items-center justify-between px-4 text-xs z-20 shrink-0">
-      <div className="flex items-center gap-4 text-slate-400">
-        <div>Analysis: <span className="text-slate-200">{analysis ? analysis.filename : 'None selected'}</span></div>
-        <div>CRS: <span className="text-slate-200">EPSG:4326</span></div>
+      <div className="flex items-center gap-4 text-xs font-medium text-slate-300">
+        <span className="flex items-center gap-1.5 bg-slate-800 px-2 py-1 rounded">
+          <span className="text-blue-400">Analysis:</span>
+          {analysis ? analysis.filename : 'None'}
+        </span>
+        <span className="flex items-center gap-1.5 bg-slate-800 px-2 py-1 rounded">
+          <span className="text-purple-400">Model:</span>
+          wu-pr-gw/segformer-b2-finetuned-with-LoveDA
+        </span>
+        {analysis?.normalized_crs && (
+          <span className="flex items-center gap-1.5">
+            <span className="text-emerald-400">CRS:</span>
+            {analysis.normalized_crs}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-4 text-slate-400">
         <div>AI Features: <span className="text-slate-200">{analysis ? aiFeatureCount : 0}</span></div>

@@ -5,8 +5,8 @@ import json
 from datetime import datetime
 
 API_BASE = "http://localhost:8000/api/v1"
-ADMIN_EMAIL = os.getenv("SEED_ADMIN_EMAIL", "admin@urbansense.ai")
-ADMIN_PASS = os.getenv("SEED_ADMIN_PASSWORD", "changeme_admin")
+ADMIN_EMAIL = os.getenv("SEED_ADMIN_EMAIL", "test@urbansense.ai")
+ADMIN_PASS = os.getenv("SEED_ADMIN_PASSWORD", "testpass123")
 
 def run_verification():
     print(f"[{datetime.now().isoformat()}] Starting Production Verification...")
@@ -16,12 +16,12 @@ def run_verification():
     try:
         res = requests.get("http://localhost:8000/health")
         if res.status_code == 200:
-            print("✓ [PASS] Health check")
+            print("[PASS] Health check")
         else:
-            print("✗ [FAIL] Health check")
+            print("[FAIL] Health check")
             return False
     except Exception as e:
-        print("✗ [FAIL] Health check connection:", e)
+        print("[FAIL] Health check connection:", e)
         return False
 
     # 2. Authentication

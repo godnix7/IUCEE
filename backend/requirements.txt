@@ -29,3 +29,4 @@ nvidia-ml-py
 torchvision
 slowapi
 bcrypt
+timm  # required by facebook/detr-resnet-101 (ResNet backbone via timm)

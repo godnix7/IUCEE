@@ -1,15 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Sparkles, CheckCircle2, Clock, FileText, AlertCircle, Play } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Upload, Sparkles, CheckCircle2, Clock, FileText, AlertCircle, Play, Layers, ScanEye } from 'lucide-react';
 import { api } from '../../api';
 import type { Project, ImageryAnalysis } from '../../types';
+import { useUploadQueue } from '../../context/UploadContext';
 
 export const AnalysisWorkspace: React.FC<{ onNavigateMap: () => void }> = ({ onNavigateMap }) => {
+  const {
+    files, setFiles,
+    populationCount, setPopulationCount,
+    populationSource, setPopulationSource,
+    populationDate, setPopulationDate,
+    selectedProjectId, setSelectedProjectId,
+    analysisMode, setAnalysisMode
+  } = useUploadQueue();
+  
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
-  const [populationCount, setPopulationCount] = useState<number | ''>('');
-  const [populationSource, setPopulationSource] = useState('user_supplied');
-  const [populationDate, setPopulationDate] = useState(new Date().toISOString().split('T')[0]);
-  const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [currentAnalysis, setCurrentAnalysis] = useState<ImageryAnalysis | null>(null);
   const [error, setError] = useState('');
@@ -17,31 +24,66 @@ export const AnalysisWorkspace: React.FC<{ onNavigateMap: () => void }> = ({ onN
   useEffect(() => {
     api.projects.list().then(projs => {
       setProjects(projs);
-      if (projs.length > 0) setSelectedProjectId(projs[0].id);
+      if (projs.length > 0 && !selectedProjectId) {
+        setSelectedProjectId(projs[0].id);
+      }
     });
+  }, []);
+
+  useEffect(() => {
+    if (selectedProjectId) sessionStorage.setItem('selectedProjectId', selectedProjectId.toString());
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    const savedId = sessionStorage.getItem('selectedAnalysisId');
+    if (savedId) {
+      api.inference.getStatus(Number(savedId)).then(setCurrentAnalysis).catch(console.error);
+    }
   }, []);
 
   const handleUploadAndRun = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file || !selectedProjectId) {
-      setError('Please select a project and upload a valid image file');
+    if (files.length === 0 || !selectedProjectId) {
+      setError('Please select a project and upload valid image files');
       return;
     }
 
     setError('');
     setUploading(true);
     try {
-      const analysis = await api.inference.upload(
-        selectedProjectId, 
-        file, 
-        populationCount === '' ? undefined : populationCount, 
-        populationSource, 
-        populationDate
-      );
+      let lastRes = null;
+      for (const f of files) {
+        if (!f.name.match(/\.(jpg|jpeg|png|tif|tiff|geotiff)$/i)) continue;
+        lastRes = await api.inference.upload(
+          selectedProjectId,
+          f,
+          populationCount === '' ? undefined : populationCount,
+          populationSource,
+          populationDate,
+          analysisMode
+        );
+      }
+      
+      if (!lastRes) {
+        throw new Error('No valid images found in selection.');
+      }
+      
+      const analysis = await api.inference.getStatus(lastRes.analysis_id);
       setCurrentAnalysis(analysis);
+      sessionStorage.setItem('selectedAnalysisId', analysis.id.toString());
 
-      const updated = await api.inference.run(analysis.id);
-      setCurrentAnalysis(updated);
+      const interval = setInterval(async () => {
+        try {
+          const updated = await api.inference.getStatus(lastRes.analysis_id);
+          setCurrentAnalysis(updated);
+          if (updated.status === 'completed' || updated.status === 'failed') {
+            clearInterval(interval);
+          }
+        } catch (e) {
+          clearInterval(interval);
+        }
+      }, 3000);
+
     } catch (err: any) {
       setError(err.message || 'Analysis processing failed');
     } finally {
@@ -56,7 +98,7 @@ export const AnalysisWorkspace: React.FC<{ onNavigateMap: () => void }> = ({ onN
           <Sparkles className="text-blue-400" size={24} /> AI Analysis Workspace
         </h1>
         <p className="text-xs text-slate-400 mt-1">
-          Upload satellite imagery or drone orthomosaics for pretrained aerial SegFormer inference
+          Choose an analysis mode, then upload imagery. Segmentation suits nadir (top-down) aerial/satellite; Detection suits oblique drone footage.
         </p>
       </div>
 
@@ -67,6 +109,36 @@ export const AnalysisWorkspace: React.FC<{ onNavigateMap: () => void }> = ({ onN
       )}
 
       <form onSubmit={handleUploadAndRun} className="bg-[#111827] border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+        <div>
+          <label className="block text-xs font-medium text-slate-300 mb-1.5">Analysis Mode</label>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <ModeCard
+              active={analysisMode === 'segmentation'}
+              onClick={() => setAnalysisMode('segmentation')}
+              icon={<Layers size={18} />}
+              title="Land-cover Segmentation"
+              subtitle="Building / road / water / tree (LoveDA)"
+              hint="Best for nadir aerial & satellite"
+            />
+            <ModeCard
+              active={analysisMode === 'scene_segmentation'}
+              onClick={() => setAnalysisMode('scene_segmentation')}
+              icon={<Layers size={18} />}
+              title="Scene Segmentation"
+              subtitle="Road / building / tree / car / person (ADE20K)"
+              hint="Best for oblique drone imagery"
+            />
+            <ModeCard
+              active={analysisMode === 'detection'}
+              onClick={() => setAnalysisMode('detection')}
+              icon={<ScanEye size={18} />}
+              title="Object Detection"
+              subtitle="Vehicles & people (counts)"
+              hint="Best for oblique drone footage"
+            />
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-medium text-slate-300 mb-1.5">Target Project</label>
@@ -116,30 +188,60 @@ export const AnalysisWorkspace: React.FC<{ onNavigateMap: () => void }> = ({ onN
         <div className="border-2 border-dashed border-slate-700 hover:border-blue-500/50 rounded-xl p-8 text-center transition-colors">
           <Upload className="mx-auto text-blue-400 mb-3" size={32} />
           <h4 className="text-sm font-semibold text-white mb-1">
-            {file ? file.name : 'Select or Drop GeoTIFF / Satellite Image'}
+            {files.length > 0 ? `${files.length} file(s) selected` : 'Select or Drop GeoTIFF / Satellite Images or Folder'}
           </h4>
-          <p className="text-xs text-slate-500 mb-4">Supported Formats: .geotiff, .tif, .png, .jpg (Max 500MB)</p>
+          <p className="text-xs text-slate-500 mb-4">Supported Formats: .geotiff, .tif, .png, .jpg</p>
 
           <input
             type="file"
             id="file-upload"
-            onChange={(e) => e.target.files?.[0] && setFile(e.target.files[0])}
+            multiple
+            accept=".geotiff,.tif,.tiff,.png,.jpg,.jpeg"
+            onChange={(e) => {
+              if (e.target.files) setFiles(Array.from(e.target.files));
+            }}
             className="hidden"
           />
-          <label
-            htmlFor="file-upload"
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-medium cursor-pointer border border-slate-700"
-          >
-            Browse Imagery File
-          </label>
+          <div className="flex justify-center gap-3">
+            <label
+              htmlFor="file-upload"
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-medium cursor-pointer border border-slate-700"
+            >
+              Browse Files or Folder
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById('file-upload') as HTMLInputElement;
+                if (el) {
+                  el.removeAttribute('webkitdirectory');
+                  el.removeAttribute('directory');
+                  el.click();
+                  setTimeout(() => {
+                    el.setAttribute('webkitdirectory', 'true');
+                    el.setAttribute('directory', 'true');
+                  }, 100);
+                }
+              }}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-medium cursor-pointer border border-slate-700"
+            >
+              Browse Files Only
+            </button>
+          </div>
         </div>
 
         <button
           type="submit"
-          disabled={uploading || !file}
+          disabled={uploading || files.length === 0}
           className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-medium text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20"
         >
-          {uploading ? 'Processing AI Segmentation & OSM Enrichment...' : 'Run AI Imagery Segmentation Pipeline'}
+          {uploading
+            ? 'Uploading & queuing…'
+            : analysisMode === 'detection'
+              ? 'Run Object Detection Pipeline'
+              : analysisMode === 'scene_segmentation'
+                ? 'Run Scene Segmentation Pipeline'
+                : 'Run Land-cover Segmentation Pipeline'}
         </button>
       </form>
 
@@ -157,23 +259,127 @@ export const AnalysisWorkspace: React.FC<{ onNavigateMap: () => void }> = ({ onN
           </div>
 
           <div className="space-y-3">
-            <StatusStep title="File Upload & Coordinate Validation" done={true} />
-            <StatusStep title="SegFormer PyTorch Pretrained Inference" done={currentAnalysis.status === 'completed'} />
-            <StatusStep title="OpenStreetMap Layer Enrichment (Schools/Hospitals/Slums)" done={currentAnalysis.status === 'completed'} />
-            <StatusStep title="Urban Metrics & Benchmark Score Calculation" done={currentAnalysis.status === 'completed'} />
+            {(currentAnalysis.analysis_mode === 'detection') ? (
+              <>
+                <StatusStep title="File Upload & Validation" done={true} />
+                <StatusStep title="COCO Object Detection Inference (vehicles / people)" done={currentAnalysis.status === 'completed'} />
+                <StatusStep title="Annotated Overlay & Detection Summary" done={currentAnalysis.status === 'completed'} />
+              </>
+            ) : (
+              <>
+                <StatusStep title="File Upload & Coordinate Validation" done={true} />
+                <StatusStep title="SegFormer PyTorch Pretrained Inference" done={currentAnalysis.status === 'completed'} />
+                <StatusStep title="OpenStreetMap Layer Enrichment (Schools/Hospitals/Slums)" done={currentAnalysis.status === 'completed'} />
+                <StatusStep title="Urban Metrics & Benchmark Score Calculation" done={currentAnalysis.status === 'completed'} />
+              </>
+            )}
           </div>
 
+          {currentAnalysis.status === 'completed' && currentAnalysis.analysis_mode === 'detection' && (
+            <DetectionResults analysis={currentAnalysis} />
+          )}
+
           {currentAnalysis.status === 'completed' && (
-            <div className="pt-4 border-t border-slate-800 flex justify-end">
+            <div className="pt-4 border-t border-slate-800 flex justify-end gap-2">
               <button
-                onClick={onNavigateMap}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg flex items-center gap-2 shadow-lg shadow-emerald-600/20"
+                onClick={() => navigate(`/analyses/${currentAnalysis.id}/review`)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg flex items-center gap-2 shadow-lg shadow-blue-600/20"
               >
-                <Play size={14} /> Open GIS Explorer Map
+                <ScanEye size={14} /> Review AI Detections
               </button>
+              {currentAnalysis.analysis_mode !== 'detection' && (
+                <button
+                  onClick={onNavigateMap}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg flex items-center gap-2 shadow-lg shadow-emerald-600/20"
+                >
+                  <Play size={14} /> Open GIS Explorer Map
+                </button>
+              )}
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+};
+
+const ModeCard: React.FC<{
+  active: boolean; onClick: () => void; icon: React.ReactNode;
+  title: string; subtitle: string; hint: string;
+}> = ({ active, onClick, icon, title, subtitle, hint }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`text-left p-3 rounded-xl border transition-colors ${
+      active
+        ? 'bg-blue-500/10 border-blue-500/60 ring-1 ring-blue-500/40'
+        : 'bg-slate-900 border-slate-700 hover:border-slate-600'
+    }`}
+  >
+    <div className="flex items-center gap-2">
+      <span className={active ? 'text-blue-400' : 'text-slate-400'}>{icon}</span>
+      <span className="text-xs font-semibold text-white">{title}</span>
+      {active && <CheckCircle2 size={14} className="text-blue-400 ml-auto" />}
+    </div>
+    <p className="text-[11px] text-slate-300 mt-1.5">{subtitle}</p>
+    <p className="text-[10px] text-slate-500 mt-0.5">{hint}</p>
+  </button>
+);
+
+const DetectionResults: React.FC<{ analysis: ImageryAnalysis }> = ({ analysis }) => {
+  const [overlayUrl, setOverlayUrl] = useState<string | null>(null);
+  const [imgErr, setImgErr] = useState(false);
+  const summary = analysis.detection_summary;
+
+  useEffect(() => {
+    let revoked: string | null = null;
+    api.inference
+      .getDetectionOverlayUrl(analysis.id)
+      .then((url) => { revoked = url; setOverlayUrl(url); })
+      .catch(() => setImgErr(true));
+    return () => { if (revoked) URL.revokeObjectURL(revoked); };
+  }, [analysis.id]);
+
+  const counts = summary?.class_counts || {};
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div className="pt-4 border-t border-slate-800 space-y-4">
+      <div className="flex items-center justify-between">
+        <h4 className="text-xs font-semibold text-white flex items-center gap-2">
+          <ScanEye size={14} className="text-blue-400" /> Detection Results
+        </h4>
+        <span className="text-[10px] text-slate-500">{summary?.model}</span>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <span className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-500/10 text-blue-300 border border-blue-500/30">
+          {summary?.total_detections ?? 0} total objects
+        </span>
+        {entries.map(([cls, n]) => (
+          <span key={cls} className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-slate-800 text-slate-200 border border-slate-700">
+            {cls}: {n}
+          </span>
+        ))}
+      </div>
+
+      {!summary?.geo_referenced && (
+        <p className="text-[10px] text-amber-400/80 flex items-center gap-1">
+          <AlertCircle size={11} /> Image is not georeferenced — results are shown on the image, not the map.
+        </p>
+      )}
+
+      {overlayUrl && !imgErr ? (
+        <img
+          src={overlayUrl}
+          alt="Detection overlay"
+          onError={() => setImgErr(true)}
+          className="w-full rounded-xl border border-slate-800"
+        />
+      ) : imgErr ? (
+        <p className="text-xs text-slate-500">Overlay image unavailable.</p>
+      ) : (
+        <p className="text-xs text-slate-500">Loading overlay…</p>
       )}
     </div>
   );

@@ -6,6 +6,8 @@ services:
     container_name: urbansense-backend
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend:/app
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-production}
       - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-urbansense}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-urbansense_gis}
@@ -67,16 +69,26 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: urbansense-worker
-    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--pool=solo"]
+    volumes:
+      - ./backend:/app
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-production}
       - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-urbansense}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-urbansense_gis}
+      - SECRET_KEY=${SECRET_KEY}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     depends_on:
       db:
         condition: service_healthy

@@ -82,16 +82,24 @@ def get_geojson_export(
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
-    features = db.query(SpatialFeature).filter(SpatialFeature.analysis_id == analysis_id).all()
+    from sqlalchemy import func
+    import json
+    
+    features = db.query(
+        SpatialFeature,
+        func.ST_AsGeoJSON(SpatialFeature.geometry).label('geometry_json')
+    ).filter(SpatialFeature.analysis_id == analysis_id).all()
     
     geojson = {
         "type": "FeatureCollection",
         "features": []
     }
-    for f in features:
+    for row in features:
+        f = row.SpatialFeature
+        geom_json = json.loads(row.geometry_json) if row.geometry_json else None
         feature = {
             "type": "Feature",
-            "geometry": f.geometry_json,
+            "geometry": geom_json,
             "properties": {
                 "id": f.id,
                 "class_name": f.class_name,

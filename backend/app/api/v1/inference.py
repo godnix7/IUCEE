@@ -22,18 +22,30 @@ _ALLOWED_MIME_TYPES = {
     ".jpeg": {"image/jpeg", "image/jpg"},
 }
 
+_ALLOWED_MODES = {"segmentation", "detection", "scene_segmentation"}
+
 @router.post("/upload")
 def upload_imagery(
     project_id: int = Form(...),
     population_count: Optional[int] = Form(None),
     population_source: Optional[str] = Form(None),
     population_date: Optional[str] = Form(None),
+    analysis_mode: str = Form("segmentation"),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["admin", "planner"])),
     _spatial: None = Depends(require_spatial_db)
 ):
-    """Upload GeoTIFF / Drone Orthomosaic / Satellite image file for analysis."""
+    """Upload GeoTIFF / Drone Orthomosaic / Satellite image file for analysis.
+
+    analysis_mode:
+      - 'segmentation' (default): LoveDA land-cover segmentation. Best for nadir aerial/satellite.
+      - 'detection': COCO object detection (vehicles/people). Best for oblique drone imagery.
+    """
+    analysis_mode = (analysis_mode or "segmentation").lower()
+    if analysis_mode not in _ALLOWED_MODES:
+        raise HTTPException(status_code=400, detail=f"Invalid analysis_mode. Allowed: {sorted(_ALLOWED_MODES)}")
+
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -61,6 +73,7 @@ def upload_imagery(
         filename=file.filename,
         file_path="pending", # placeholder
         file_type=file_type,
+        analysis_mode=analysis_mode,
         population_count=population_count,
         population_source=population_source,
         population_date=population_date,
@@ -187,3 +200,29 @@ def get_analysis_status(
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
     return analysis
+
+@router.get("/{analysis_id}/detection-overlay")
+def get_detection_overlay(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Stream the annotated detection overlay image (detection-mode analyses only)."""
+    from fastapi.responses import StreamingResponse
+    import io
+    analysis = db.query(ImageryAnalysis).filter(ImageryAnalysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if not analysis.detection_overlay_key:
+        raise HTTPException(status_code=404, detail="No detection overlay for this analysis")
+
+    fd, tmp = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+    try:
+        StorageService.download_file(analysis.detection_overlay_key, tmp)
+        with open(tmp, "rb") as fh:
+            data = fh.read()
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return StreamingResponse(io.BytesIO(data), media_type="image/jpeg")
